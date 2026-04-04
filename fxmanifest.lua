@@ -1,7 +1,7 @@
 fx_version 'cerulean'
 game 'gta5'
 
-author 'Antigravity / JGR'
+author 'JGR Studio'
 description 'JGR_IlegalSystem - Advanced Integrated Illegal Roles System'
 version '1.0.0'
 
