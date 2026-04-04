@@ -1,0 +1,111 @@
+Locales = Locales or {}
+
+Locales['es'] = {
+    -- NUI Translations (Can be loaded in NUI as well but usually NUI handles its own, we keep server/client ones here)
+    ['no_permission'] = "No tienes permiso para hacer esto.",
+    ['token_granted'] = "Has otorgado permiso de creación de banda a la ID: %s",
+    ['token_received'] = "Has recibido permiso para crear una banda. Usa /creategang",
+    ['player_not_found'] = "Jugador no encontrado.",
+    ['gang_created'] = "Banda creada exitosamente.",
+    ['gang_creation_failed'] = "Error al crear la banda.",
+    ['gang_creation_failed'] = "Error al crear la banda.",
+    ['invalid_args'] = "Argumentos inválidos.",
+    ['rank_not_found'] = "El rango %s no existe en la banda %s.",
+    ['gang_not_found'] = "La banda %s no existe.",
+    ['gang_member_added'] = "Has añadido a %s a la banda %s con el rango temporal: %s",
+    ['gang_member_updated'] = "Has actualizado el rango de %s en la banda %s (%s)",
+    ['you_are_now_in_gang'] = "Ahora perteneces a la banda %s (Rango: %s)",
+    ['gang_capacity_updated'] = "La capacidad de la Organización %s se ha actualizado a un máximo de %s miembros.",
+    
+    -- Ghost Ped UI
+    ['place_npc'] = "[ENTER] Confirmar | [SCROLL] Rotar | [ARROWS] Cambiar Modelo",
+
+    -- Config Translations (Names)
+    ['perm_full_access'] = "Acceso Total",
+    ['perm_stash'] = "Almacén",
+    ['perm_manage_members'] = "Gestionar Miembros y Rangos",
+    ['perm_gang_points'] = "Puntos de Organización",
+    ['perm_quick_menu'] = "Menú rápido de la Organización",
+    ['perm_npc_control'] = "Control de NPC",
+    ['perm_radio'] = "Acceder a la Radio",
+    ['perm_garage'] = "Acceso al Garaje",
+    ['perm_safe'] = "Acceso a la Caja Fuerte",
+    
+    -- Config Translations (Descriptions)
+    ['desc_full_access'] = "Permitir acceso a todas las funciones de la organización",
+    ['desc_stash'] = "Permitir acceso al almacén de la organización",
+    ['desc_manage_members'] = "Permitir gestionar miembros y rangos de la organización",
+    ['desc_gang_points'] = "Permitir gestionar los puntos de la organización",
+    ['desc_quick_menu'] = "Permitir acceder al menú rápido de la organización",
+    ['desc_npc_control'] = "Permitir controlar los NPC de la organización",
+    ['desc_radio'] = "Permitir acceder a la radio de la organización",
+    ['desc_garage'] = "Permitir acceder al garaje de la organización",
+    ['desc_safe'] = "Permitir acceder a la caja fuerte",
+
+    ['spec_weed'] = "Especialización de Hierba",
+    ['spec_cocaine'] = "Especialización de Cocaína",
+    ['spec_meth'] = "Especialización de Metanfetamina",
+    ['spec_weapons'] = "Especialización de Armas",
+
+    -- UI Translations
+    ['ui_title'] = "CREAR TU ORGANIZACIÓN",
+    ['ui_subtitle'] = "Configura los aspectos esenciales.",
+    ['ui_org_name'] = "NOMBRE DE LA ORGANIZACIÓN",
+    ['ui_ranks'] = "RANGOS",
+    ['ui_permissions'] = "PERMISOS",
+    ['ui_cancel'] = "CANCELAR",
+    ['ui_continue'] = "CONTINUAR",
+    ['ui_spec_title'] = "ELIJA LA ESPECIALIZACIÓN DE SU ORGANIZACIÓN",
+    ['ui_spec_subtitle'] = "Elija uno de los cuatro objetivos para determinar la especialización de su organización",
+    ['ui_finish_title'] = "TU ORGANIZACIÓN HA SIDO CREADA",
+    ['ui_finish_desc'] = "Su organización se ha creado con éxito. Haga clic en finalizar para acceder a toda la gerencia de su negocio, donde puede comenzar a reclutar personal, adquirir actualizaciones y mucho más.",
+    ['ui_finish_btn'] = "FINALIZAR",
+    ['ui_add_rank'] = "AÑADIR RANGO",
+
+    -- Admin Panel Translations
+    ['interact_npc'] = "[E] - Hablar con %s",
+    ['opening_menu'] = "Hablando con %s...",
+    ['admin_panel_title'] = "PANEL DE CONTROL DE BANDAS",
+    ['admin_panel_desc'] = "Vista global de todas las organizaciones ilegales registradas y activas.",
+    ['table_name'] = "NOMBRE",
+    ['table_members'] = "MIEMBROS",
+    ['table_max'] = "LÍMITE MÁX.",
+    ['table_actions'] = "ACCIONES",
+    ['action_edit'] = "Editar Límite",
+    ['action_delete'] = "Eliminar",
+    ['gang_deleted'] = "La organización %s ha sido eliminada del servidor.",
+
+    -- Gang Menu Translations
+    ['ui_gm_level'] = "NIVEL",
+    ['ui_gm_rank'] = "RANGO",
+    ['ui_gm_members'] = "MIEMBROS",
+    ['ui_gm_territories'] = "TERRITORIOS",
+    ['ui_gm_cameras'] = "CÁMARAS",
+    ['ui_gm_documents'] = "DOCUMENTOS",
+    ['ui_gm_config'] = "CONFIGURACIÓN",
+    ['ui_gm_stats'] = "ESTADÍSTICAS",
+    ['ui_gm_activities'] = "ACTIVIDADES",
+    ['ui_gm_weed'] = "Marihuana",
+    ['ui_gm_no_members'] = "No hay miembros disponibles",
+
+    ['ui_gm_t_terr_header'] = "MIS TERRITORIOS",
+    ['ui_gm_t_terr_empty'] = "No tienes territorios capturados.",
+    ['ui_gm_t_terr_desc'] = "Conquista zonas estratégicas en la ciudad para generar beneficios pasivos, respeto y ventajas tácticas para tu banda.",
+    ['ui_gm_t_cam_header'] = "SISTEMA DE CCTV DIGITAL",
+    ['ui_gm_t_cam_empty'] = "No hay cámaras instaladas.",
+    ['ui_gm_t_cam_desc'] = "Aún no has intervenido los sistemas de seguridad de la ciudad. Coloca cámaras en tus zonas clave.",
+    ['ui_gm_t_doc_header'] = "ARCHIVOS COMPARTIDOS",
+    ['ui_gm_t_doc_new'] = "NUEVO DOCUMENTO",
+    ['ui_gm_t_doc_viewer'] = "VISOR Y EDICIÓN",
+    ['ui_gm_t_doc_save'] = "GUARDAR EN EL SERVIDOR",
+    ['ui_gm_t_cfg_members'] = "GESTIÓN DE PERSONAL",
+    ['ui_gm_t_cfg_invite'] = "INVITAR POR ID",
+    ['ui_gm_t_cfg_settings'] = "SEDES Y ALMACENAJE",
+}
+
+function _L(str, ...)
+    if Locales[Config.Locale] and Locales[Config.Locale][str] then
+        return string.format(Locales[Config.Locale][str], ...)
+    end
+    return "Translation missing: " .. str
+end

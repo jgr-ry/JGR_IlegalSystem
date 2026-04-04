@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JGR Ilegal System UI</title>
+  <!-- Google Fonts for futuristic look -->
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Inter:wght@400;500;700&display=swap"
+    rel="stylesheet">
+  <!-- FontAwesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="style.css?v=5">
+</head>
+
+<body style="display: none;">
+  <!-- Persistent Delivery Timer HUD (independent of menu) -->
+  <div id="deliveryHud"
+    style="display:none; position:fixed; top:50%; left:20px; transform:translateY(-50%); z-index:9999; pointer-events:none; overflow:hidden; border-radius:16px;">
+    <div
+      style="background: rgba(0,0,0,0.85); border: 1px solid rgba(16,185,129,0.4); border-radius: 16px; padding: 15px 20px; min-width: 200px; backdrop-filter: blur(10px);">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+        <i class="fa-solid fa-truck" style="color:#10b981; font-size:1.2rem;"></i>
+        <span style="color:white; font-family:'Outfit',sans-serif; font-weight:600; font-size:0.95rem;">Envío en
+          camino</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="flex:1; height:4px; background:rgba(255,255,255,0.1); border-radius:4px; overflow:hidden;">
+          <div id="deliveryProgressBar"
+            style="height:100%; background:linear-gradient(90deg,#10b981,#4ade80); border-radius:4px; width:100%; transition:width 1s linear;">
+          </div>
+        </div>
+        <span id="deliveryCountdown"
+          style="color:#4ade80; font-weight:bold; font-family:'Outfit',sans-serif; font-size:1.1rem; min-width:50px; text-align:right;">0:00</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- STEP 1: CONFIGURATION -->
+    <main id="step1" class="step-container hidden">
+      <header class="header">
+        <h1 id="ui_title">CREAR TU ORGANIZACIÓN</h1>
+        <p id="ui_subtitle">Configura los aspectos esenciales de su nueva organización.</p>
+      </header>
+
+      <section class="main-content">
+        <!-- Gang Name & Color -->
+        <div class="input-group top-inputs">
+          <div class="color-picker-wrapper">
+            <input type="color" id="gangColor" value="#ff0000">
+          </div>
+          <div class="name-input-wrapper">
+            <i class="fa-solid fa-users"></i>
+            <input type="text" id="gangName" placeholder="NOMBRE DE LA ORGANIZACIÓN">
+          </div>
+        </div>
+
+        <div class="split-layout">
+          <!-- Ranks Mockup Column -->
+          <div class="ranks-column blurred-box">
+            <h3 id="ui_ranks">RANGOS <span class="badge">(Permisos)</span></h3>
+            <div class="ranks-list" id="ranksList">
+              <div class="rank-item active" data-rank="Jefe">
+                <i class="fa-solid fa-tag"></i> <span class="rank-name">Jefe</span> <i
+                  class="fa-solid fa-trash btn-delete-rank" style="display:none; margin-left:auto;"></i>
+              </div>
+            </div>
+            <button class="btn btn-success" id="btnAddRank"
+              style="margin-top: 15px; width: 100%; justify-content: center;">
+              <i class="fa-solid fa-plus"></i> <span id="ui_add_rank">NUEVO RANGO</span>
+            </button>
+          </div>
+
+          <!-- Permissions Mockup Column -->
+          <div class="permissions-column blurred-box">
+            <h3 id="ui_permissions">PERMISOS <span class="badge">Jefe</span></h3>
+            <div class="permissions-list" id="permissionsList">
+              <!-- Injected by JS -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <button class="btn btn-danger" id="btnCancel">CANCELAR</button>
+        <button class="btn btn-primary" id="btnContinueStep1">CONTINUAR <i class="fa-solid fa-arrow-right"></i></button>
+      </footer>
+    </main>
+
+    <!-- STEP 2: GHOST PED CONTROLS (FLOATING) -->
+    <div id="step2Controls" class="floating-controls hidden">
+      <div class="control-key">
+        <span class="key-btn">ENTRAR</span>
+        <span class="key-desc" id="ctrl_confirm">Confirmar</span>
+      </div>
+      <div class="control-key">
+        <span class="key-btn">RUEDA</span>
+        <span class="key-desc" id="ctrl_rotate">Rotar</span>
+      </div>
+      <div class="control-key">
+        <span class="key-btn">FLECHAS</span>
+        <span class="key-desc" id="ctrl_change">Cambiar</span>
+      </div>
+    </div>
+
+    <!-- STEP 3: SPECIALIZATION -->
+    <main id="step3" class="step-container hidden">
+      <header class="header">
+        <h1 id="ui_spec_title">ELIJA LA ESPECIALIZACIÓN</h1>
+        <p id="ui_spec_subtitle">Determine la especialización base de su organización</p>
+      </header>
+
+      <div class="specializations-grid" id="specializationsGrid">
+        <!-- Injected by JS -->
+      </div>
+
+      <footer class="footer center-footer">
+        <button class="btn btn-primary btn-large disabled" id="btnContinueStep3">CONTINUAR <i
+            class="fa-solid fa-arrow-right"></i></button>
+      </footer>
+    </main>
+
+    <!-- STEP 4: FINALIZE -->
+    <main id="step4" class="step-container hidden text-center">
+      <header class="header">
+        <h1 id="ui_finish_title">TU ORGANIZACIÓN HA SIDO CREADA</h1>
+      </header>
+
+      <div class="success-icon">
+        <i class="fa-solid fa-user-tie"></i>
+      </div>
+
+      <p id="ui_finish_desc" class="desc-text">
+        Su organización se ha creado con éxito. Haga clic en finalizar para acceder a toda la gerencia de su negocio.
+      </p>
+
+      <footer class="footer center-footer mt-2">
+        <button class="btn btn-success btn-large" id="btnFinish">FINALIZAR <i class="fa-solid fa-check"></i></button>
+      </footer>
+    </main>
+
+    <!-- ADMIN PANEL -->
+    <main id="adminPanel" class="step-container hidden">
+      <header class="header">
+        <h1 id="ui_admin_title">PANEL DE CONTROL</h1>
+        <p id="ui_admin_desc">Gestión global de organizaciones</p>
+      </header>
+
+      <section class="main-content blurred-box admin-box">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th id="th_name">Nombre</th>
+              <th id="th_members">Miembros</th>
+              <th id="th_max">Max</th>
+              <th id="th_actions" style="text-align: right;">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="adminGangList">
+            <!-- Dynamic Injection -->
+          </tbody>
+        </table>
+      </section>
+
+      <footer class="footer">
+        <button class="btn btn-danger" id="btnCloseAdmin">CERRAR <i class="fa-solid fa-xmark"></i></button>
+      </footer>
+    </main>
+
+    <!-- EDIT LIMIT MODAL -->
+    <div id="editLimitModal" class="modal hidden">
+      <div class="modal-content blurred-box">
+        <h2 id="ui_edit_title"
+          style="font-family: var(--font-heading); margin-bottom: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
+          EDITAR LÍMITE</h2>
+        <p id="ui_edit_desc" style="color: var(--text-muted); margin-bottom: 15px;">Introduce el nuevo límite máximo de
+          miembros para la banda: <strong id="editModalGangName" style="color: white;"></strong></p>
+        <input type="number" id="editModalInput" class="admin-input-number" min="1"
+          style="width:100%; font-size: 1.2rem; margin-bottom: 20px;">
+        <div style="display:flex; gap:10px; justify-content: flex-end;">
+          <button class="btn btn-danger" id="btnCancelEdit">Cancelar</button>
+          <button class="btn btn-success" id="btnConfirmEdit">Guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- DELETE CONFIRM MODAL -->
+    <div id="deleteConfirmModal" class="modal hidden">
+      <div class="modal-content blurred-box">
+        <h2 id="ui_delete_title"
+          style="font-family: var(--font-heading); margin-bottom: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; color: var(--danger);">
+          ELIMINAR BANDA</h2>
+        <p id="ui_delete_desc" style="color: var(--text-muted); margin-bottom: 20px; font-size: 1.1rem;">¿Estás
+          completamente seguro de que quieres eliminar la organización <strong id="deleteModalGangName"
+            style="color: white;"></strong>?<br><br><span style="color: var(--danger); font-size: 0.9rem;">Esta acción
+            borrará la base de datos, los rangos, los miembros y el NPC. No se puede deshacer.</span></p>
+        <div style="display:flex; gap:10px; justify-content: flex-end;">
+          <button class="btn btn-primary" id="btnCancelDelete"
+            style="background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2);">Cancelar</button>
+          <button class="btn btn-danger" id="btnConfirmDelete">Sí, Eliminar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- GANG MANAGEMENT MENU (PHASE 4) -->
+    <div id="gangMenuWrapper" class="gang-menu-wrapper hidden">
+      <main id="gangMenuContainer" class="gang-menu-container">
+        <!-- Top Bar -->
+        <header class="gm-header">
+          <div class="gm-level-info" style="flex: 1;">
+            <h2 id="gmLevelText">LEVEL 0</h2>
+          </div>
+          <div class="gm-title-container" style="flex: 2; display: flex; flex-direction: column; align-items: center;">
+            <h1 id="gmGangName" class="gm-neon-text">NOMBRE BANDA</h1>
+            <div class="gm-level-progress">
+              <div class="gm-progress-bar">
+                <div class="gm-progress-fill" id="gmLevelFill" style="width: 0%;"></div>
+              </div>
+              <span class="gm-next-level" id="gmNextLevel">NIVEL 1</span>
+            </div>
+          </div>
+          <div class="gm-header-actions" style="flex: 1; display: flex; justify-content: flex-end; gap: 10px;">
+            <button class="btn btn-close-gm hidden" id="btnBackGangMenu"
+              style="background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2);"><i
+                class="fa-solid fa-arrow-left"></i></button>
+            <button class="btn btn-close-gm" id="btnCloseGangMenu"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+        </header>
+
+        <div class="gm-content-wrapper">
+          <!-- VIEW: DASHBOARD -->
+          <section id="gmViewDashboard" class="gm-view active">
+
+            <div class="gm-dash-toprow">
+              <!-- Stats Cards Container (Left, 3 gradient cards) -->
+              <div class="gm-stats-container">
+                <div class="gm-stat-card">
+                  <div class="gm-card-title-row">
+                    <i class="fa-solid fa-sitemap"></i>
+                    <span class="gm-stat-title" id="t_rank">RANGO</span>
+                  </div>
+                  <span class="gm-stat-val" id="gmPlayerRank">Jefe</span>
+                </div>
+                <div class="gm-stat-card">
+                  <div class="gm-card-title-row">
+                    <i class="fa-solid fa-users"></i>
+                    <span class="gm-stat-title" id="t_members">MIEMBROS</span>
+                  </div>
+                  <span class="gm-stat-val" id="gmMemberCount">1</span>
+                </div>
+                <div class="gm-stat-card">
+                  <div class="gm-card-title-row">
+                    <i class="fa-solid fa-map-location-dot"></i>
+                    <span class="gm-stat-title" id="t_territories">TERRITORIOS</span>
+                  </div>
+                  <span class="gm-stat-val" id="gmTerritoryCount">0</span>
+                </div>
+              </div>
+
+              <!-- Navigation Grid Container (Right, 4 buttons) -->
+              <div class="gm-nav-grid">
+                <button class="gm-nav-btn" data-target="gmViewTerritories">
+                  <i class="fa-solid fa-location-dot"></i>
+                  <span id="t_nav_terr">TERRITORIOS</span>
+                </button>
+                <button class="gm-nav-btn" data-target="gmViewCameras">
+                  <i class="fa-solid fa-video"></i>
+                  <span id="t_nav_cam">CÁMARAS</span>
+                </button>
+                <button class="gm-nav-btn" data-target="gmViewDocuments">
+                  <i class="fa-solid fa-file-lines"></i>
+                  <span id="t_nav_doc">DOCUMENTOS</span>
+                </button>
+                <button class="gm-nav-btn" data-target="gmViewConfig" id="btnNavConfig">
+                  <i class="fa-solid fa-gears"></i>
+                  <span id="t_nav_conf">CONFIGURACIÓN</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="gm-dash-bottomrow">
+              <!-- Members List -->
+              <div class="gm-panel gm-panel-members">
+                <div class="gm-panel-header" id="t_panel_members">MIEMBROS</div>
+                <div class="gm-panel-content" id="gmDashboardMembers">
+                  <!-- JS Injected -->
+                </div>
+              </div>
+
+              <!-- Statistics / Chart -->
+              <div class="gm-panel gm-panel-stats">
+                <div class="gm-panel-header" id="t_panel_stats">ESTADÍSTICAS</div>
+                <div class="gm-panel-content gm-chart-wrapper">
+                  <div class="gm-chart-legend"><span class="legend-box"></span> TERRITORIOS CAPTURADOS (14 DÍAS)</div>
+                  <div class="gm-chart-grid">
+                    <div class="chart-line"><span>1.0</span></div>
+                    <div class="chart-line"><span>0.8</span></div>
+                    <div class="chart-line"><span>0.6</span></div>
+                    <div class="chart-line"><span>0.4</span></div>
+                    <div class="chart-line"><span>0.2</span></div>
+                    <div class="chart-line"><span>0</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Activities -->
+              <div class="gm-panel gm-panel-activities">
+                <div class="gm-panel-header" id="t_panel_activities">ACTIVIDADES</div>
+                <div class="gm-panel-content gm-activities-content">
+                  <!-- Activity 1: Weed -->
+                  <div class="gm-activity" id="act_weed_container">
+                    <div class="gm-act-header">
+                      <span class="gm-act-icon negative"><i class="fa-solid fa-skull"></i> 0</span>
+                      <div class="gm-act-title" id="t_act_weed">Marihuana <span class="badge gm-badge-blue"
+                          id="act_weed_badge">PRINCIPIANTE</span></div>
+                      <span class="gm-act-icon positive"><i class="fa-solid fa-check"></i> 0</span>
+                    </div>
+                    <div class="gm-activity-bar-wrap">
+                      <div class="act-labels"><span>Actual</span><span>Progreso</span><span>Siguiente</span></div>
+                      <div class="act-bar">
+                        <div class="act-fill" id="act_weed_fill" style="width:0%;"></div>
+                      </div>
+                      <div class="act-labels"><span id="act_weed_cur">PRINCIPIANTE</span><span></span><span
+                          id="act_weed_nxt">NOVATO</span></div>
+                    </div>
+                  </div>
+                  <!-- Activity 2: Meth -->
+                  <div class="gm-activity" id="act_meth_container">
+                    <div class="gm-act-header">
+                      <span class="gm-act-icon negative"><i class="fa-solid fa-skull"></i> 0</span>
+                      <div class="gm-act-title">Metanfetamina <span class="badge gm-badge-blue"
+                          id="act_meth_badge">PRINCIPIANTE</span>
+                      </div>
+                      <span class="gm-act-icon positive"><i class="fa-solid fa-check"></i> 0</span>
+                    </div>
+                    <div class="gm-activity-bar-wrap">
+                      <div class="act-labels"><span>Actual</span><span>Progreso</span><span>Siguiente</span></div>
+                      <div class="act-bar">
+                        <div class="act-fill" id="act_meth_fill" style="width:0%;"></div>
+                      </div>
+                      <div class="act-labels"><span id="act_meth_cur">PRINCIPIANTE</span><span></span><span
+                          id="act_meth_nxt">NOVATO</span></div>
+                    </div>
+                  </div>
+                  <!-- Activity 3: Cocaine -->
+                  <div class="gm-activity" id="act_coke_container">
+                    <div class="gm-act-header">
+                      <span class="gm-act-icon negative"><i class="fa-solid fa-skull"></i> 0</span>
+                      <div class="gm-act-title">Cocaína <span class="badge gm-badge-blue"
+                          id="act_coke_badge">PRINCIPIANTE</span></div>
+                      <span class="gm-act-icon positive"><i class="fa-solid fa-check"></i> 0</span>
+                    </div>
+                    <div class="gm-activity-bar-wrap">
+                      <div class="act-labels"><span>Actual</span><span>Progreso</span><span>Siguiente</span></div>
+                      <div class="act-bar">
+                        <div class="act-fill" id="act_coke_fill" style="width:0%;"></div>
+                      </div>
+                      <div class="act-labels"><span id="act_coke_cur">PRINCIPIANTE</span><span></span><span
+                          id="act_coke_nxt">NOVATO</span></div>
+                    </div>
+                  </div>
+                </div> <!-- Closes gm-activities-content -->
+              </div> <!-- Closes gm-panel-activities -->
+            </div> <!-- Closes gm-dash-bottomrow -->
+          </section>
+
+          <!-- Placeholders for other views -->
+          <section id="gmViewTerritories" class="gm-view hidden">
+            <div style="display: flex; gap: 20px; height: 100%;">
+              <div class="gm-panel" style="flex: 1;">
+                <div class="gm-panel-header">INFORMACIÓN DE BANDA</div>
+                <div class="gm-panel-content" style="display:flex; flex-direction:column; gap:15px; padding: 25px;">
+                  <h3 style="color: white; font-family: var(--font-heading); font-size: 1.5rem;" id="t_terr_level">NIVEL
+                    1 - NOVATO</h3>
+                  <div class="gm-level-progress" style="width: 100%;">
+                    <div class="gm-progress-bar">
+                      <div class="gm-progress-fill" style="width: 25%;"></div>
+                    </div>
+                  </div>
+                  <p style="color: var(--text-muted); font-size: 0.9rem;">Próximo nivel: 2500 / 10000 EXP</p>
+
+                  <div style="margin-top: 20px;">
+                    <h4
+                      style="color: white; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom:10px; margin-bottom: 10px;">
+                      ZONAS CONTROLADAS</h4>
+                    <p style="color: var(--text-muted); font-size: 0.9rem;">Ningún territorio bajo control actual.</p>
+                    <!-- list of zones -->
+                  </div>
+                  <div style="margin-top: auto; padding-top: 20px;">
+                    <p style="color: var(--text-muted); font-size: 0.85rem;"><i class="fa-solid fa-circle-info"></i> El
+                      rango de control se expande completando ventas ilícitas en territorios enemigos. Para comenzar una
+                      captura, sitúa a un miembro en las esquinas de tu zona activa.</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Map View -->
+              <div class="gm-panel" id="gmMapContainer"
+                style="flex: 2; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #050810; cursor: grab;">
+                <!-- GTAV Map Placeholder Background -->
+                <div id="gmMapBg"
+                  style="position: absolute; width: 100%; height: 100%; background: url('https://i.imgur.com/sENQEqz.jpeg') center/cover no-repeat; opacity: 0.35; z-index: 0; filter: grayscale(100%); transform-origin: center; transition: transform 0.1s ease-out;">
+                </div>
+
+                <!-- Example Region Overlay (Mock) -->
+                <div id="gmMapMockPoint"
+                  style="position: absolute; width: 150px; height: 150px; background: rgba(168, 85, 247, 0.2); border: 2px solid var(--gang-color, #a855f7); border-radius: 50%; z-index: 1; display:flex; justify-content:center; align-items:center; animation: slowPulse 3s infinite alternate; transition: transform 0.1s ease-out;">
+                  <i class="fa-solid fa-location-dot"
+                    style="color: white; font-size: 1.5rem; text-shadow: 0 0 10px #000;"></i>
+                </div>
+
+                <div
+                  style="z-index: 2; text-align: center; background: rgba(0,0,0,0.6); padding: 15px 30px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(5px); bottom: 20px; position:absolute;">
+                  <p style="color: white; font-family: var(--font-heading); font-size: 1.1rem; margin: 0;">ZONA CENTRO
+                    <span style="color: var(--text-muted); font-size: 0.9rem; font-family: var(--font-body);">|
+                      INFLUENCIA: 15%</span>
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="gmViewCameras" class="gm-view hidden">
+            <div class="gm-panel" style="flex: 1;">
+              <div class="gm-panel-header" id="t_cam_header">SISTEMA DE CCTV DIGITAL</div>
+              <div class="gm-panel-content"
+                style="display:flex; justify-content:center; align-items:center; flex-direction:column; gap:20px; color:var(--text-muted);">
+                <i class="fa-solid fa-video-slash" style="font-size: 5rem; opacity: 0.3;"></i>
+                <h3 id="t_cam_empty" style="color: white; font-size: 1.5rem; font-family: var(--font-heading);">No hay
+                  cámaras instaladas.</h3>
+                <p id="t_cam_desc" style="text-align: center; max-width: 400px; line-height: 1.5;">Tu organización aún
+                  no ha intervenido los sistemas de seguridad de la ciudad. Compra y coloca cámaras en tus zonas para
+                  poder acceder al circuito cerrado.</p>
+              </div>
+            </div>
+          </section>
+
+          <section id="gmViewDocuments" class="gm-view hidden">
+            <div style="display: flex; gap: 20px; height: 100%;">
+              <!-- Doc List -->
+              <div class="gm-panel" style="flex: 1;">
+                <div class="gm-panel-header" id="t_doc_header">ARCHIVOS COMPARTIDOS</div>
+                <div class="gm-panel-content" id="gmDocList" style="display:flex; flex-direction:column; gap:10px;">
+                  <p style="text-align:center; color:var(--text-muted); font-size:0.9rem; margin-top:20px;">No hay
+                    documentos creados.</p>
+                </div>
+                <div style="padding: 15px; border-top: 1px solid rgba(255,255,255,0.05);">
+                  <button class="btn btn-primary" style="width: 100%; justify-content:center;" id="btnNewDoc"><i
+                      class="fa-solid fa-plus"></i> <span id="t_doc_new">NUEVO DOCUMENTO</span></button>
+                </div>
+              </div>
+              <!-- Editor -->
+              <div class="gm-panel" style="flex: 2;">
+                <div class="gm-panel-header" id="t_doc_viewer">VISOR Y EDICIÓN</div>
+                <div class="gm-panel-content" style="display:flex; flex-direction:column; gap:15px; padding: 25px;">
+                  <input type="text" id="gmDocTitle" class="admin-input" placeholder="Escribe el título aquí..."
+                    style="width:100%; font-size: 1.4rem; padding: 15px; background: rgba(0,0,0,0.3); border:none; border-bottom: 2px solid var(--border-color); border-radius: 8px 8px 0 0; color: white; outline: none;">
+                  <textarea id="gmDocContent" class="admin-input"
+                    style="flex:1; resize:none; font-family: var(--font-body); font-size: 1.1rem; padding: 15px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 0 0 8px 8px; line-height: 1.5; color: white; outline: none;"
+                    placeholder="Detalla aquí la información, reglas o notas..."></textarea>
+                  <div style="display:flex; justify-content:space-between; align-items: center; margin-top: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.85rem;"><i class="fa-solid fa-circle-info"></i>
+                      La información es visible para toda la banda.</span>
+                    <div style="display:flex; gap:10px;">
+                      <button class="btn btn-danger" id="gmBtnDeleteDoc" title="Eliminar"><i
+                          class="fa-solid fa-trash"></i></button>
+                      <button class="btn btn-primary" id="gmBtnSaveDoc"
+                        style="background:var(--gang-color, #a855f7); color:white; border:none; box-shadow: 0 0 10px var(--gang-color, #a855f7);"><i
+                          class="fa-solid fa-floppy-disk"></i> <span id="t_doc_save">GUARDAR EN EL
+                          SERVIDOR</span></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="gmViewConfig" class="gm-view hidden">
+            <div style="display: flex; gap: 20px; height: 100%;">
+              <!-- Member Management Flow -->
+              <div class="gm-panel" style="flex: 1;">
+                <div class="gm-panel-header" id="t_cfg_members">GESTIÓN DE PERSONAL</div>
+                <div class="gm-panel-content" id="gmConfigMembersList"
+                  style="padding-bottom:10px; display:flex; flex-direction:column; gap:10px;">
+                  <!-- JS will inject .gm-manage-row elements here -->
+                  <p style="text-align:center; color:var(--text-muted); font-size:0.9rem; margin-top:20px;">Cargando
+                    plantilla...</p>
+                </div>
+                <div style="padding: 15px; border-top: 1px solid rgba(255,255,255,0.05);">
+                  <button class="btn btn-primary"
+                    style="width:100%; justify-content:center; background: rgba(30, 41, 59, 0.8); color: white; border: 1px solid rgba(255, 255, 255, 0.1);"
+                    id="btnInviteMember"><i class="fa-solid fa-user-plus"></i> <span id="t_cfg_invite">INVITAR POR
+                      ID</span></button>
+                </div>
+              </div>
+
+              <!-- Points / Upgrades -->
+              <div class="gm-panel" style="flex: 1;">
+                <div class="gm-panel-header" id="t_cfg_settings">SEDES Y ALMACENAJE</div>
+                <div class="gm-panel-content" style="display:flex; flex-direction:column; gap:15px; padding: 25px;">
+                  <div class="gm-setting-card">
+                    <div class="gm-setting-info">
+                      <h4><i class="fa-solid fa-box-open" style="margin-right: 8px;"></i> Almacén Principal</h4>
+                      <p>Establece el punto físico donde la banda guardará armas, dinero y objetos.</p>
+                    </div>
+                    <button class="btn btn-primary btn-setting-action" id="btnPlaceStash">Colocar</button>
+                  </div>
+                  <div class="gm-setting-card">
+                    <div class="gm-setting-info">
+                      <h4><i class="fa-solid fa-car" style="margin-right: 8px;"></i> Garaje Privado</h4>
+                      <p>Define la zona de aparición y guardado de los vehículos oficiales de la banda.</p>
+                    </div>
+                    <button class="btn btn-primary btn-setting-action" id="btnPlaceGarage">Colocar</button>
+                  </div>
+                  <div class="gm-setting-card">
+                    <div class="gm-setting-info">
+                      <h4><i class="fa-solid fa-users-rays" style="margin-right: 8px;"></i> Punto de Jefe</h4>
+                      <p>Sitúa el ordenador de gestión para poder acceder a este menú físicamente.</p>
+                    </div>
+                    <button class="btn btn-primary btn-setting-action" id="btnPlaceBoss">Colocar</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Rank Management -->
+              <div class="gm-panel" style="flex: 0.8;">
+                <div class="gm-panel-header"><i class="fa-solid fa-layer-group" style="margin-right: 8px;"></i> RANGOS
+                </div>
+                <div class="gm-panel-content" id="gmRanksList"
+                  style="display:flex; flex-direction:column; gap:8px; padding: 15px;">
+                  <!-- JS will inject rank rows here -->
+                  <p style="text-align:center; color:var(--text-muted); font-size:0.9rem; margin-top:20px;">Cargando
+                    rangos...</p>
+                </div>
+                <div style="padding: 15px; border-top: 1px solid rgba(255,255,255,0.05);">
+                  <button class="btn btn-primary"
+                    style="width:100%; justify-content:center; background: rgba(74, 222, 128, 0.15); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.3);"
+                    id="btnManageRanks"><i class="fa-solid fa-plus"></i> CREAR RANGO</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+        </div>
+      </main>
+    </div>
+
+    <!-- GROW SHOP BOSS MENU (PHASE 6) -->
+    <div id="growShopWrapper" class="gang-menu-wrapper hidden" style="--gang-color: #10b981;">
+      <main id="growShopContainer" class="gang-menu-container" style="display: flex; flex-direction: row; gap: 0;">
+
+        <!-- Sidebar Navigation -->
+        <aside class="gs-sidebar"
+          style="width: 250px; background: rgba(5, 8, 16, 0.8); border-right: 1px solid rgba(16, 185, 129, 0.2); padding: 30px 20px; display: flex; flex-direction: column;">
+          <div class="gs-logo-area" style="text-align: center; margin-bottom: 40px;">
+            <i class="fa-solid fa-cannabis"
+              style="font-size: 3rem; color: #10b981; filter: drop-shadow(0 0 10px #10b981);"></i>
+            <h2
+              style="font-family: var(--font-heading); font-size: 1.5rem; color: white; margin-top: 15px; letter-spacing: 2px;">
+              GROW SHOP</h2>
+            <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 5px;">ADMINISTRACIÓN</p>
+          </div>
+
+          <div class="gs-nav" style="display: flex; flex-direction: column; gap: 15px;">
+            <button class="gs-nav-btn active" data-target="gsViewWholesale"
+              style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: white; padding: 15px; border-radius: 8px; text-align: left; font-family: var(--font-body); font-weight: 600; cursor: pointer; transition: all 0.2s;">
+              <i class="fa-solid fa-boxes-stacked" style="width: 25px;"></i> Mercado Mayorista
+            </button>
+            <button class="gs-nav-btn" data-target="gsViewCrafting"
+              style="background: transparent; border: 1px solid transparent; color: var(--text-muted); padding: 15px; border-radius: 8px; text-align: left; font-family: var(--font-body); font-weight: 600; cursor: pointer; transition: all 0.2s;">
+              <i class="fa-solid fa-flask" style="width: 25px;"></i> El Cocinero
+            </button>
+            <button class="gs-nav-btn" data-target="gsViewManagement"
+              style="background: transparent; border: 1px solid transparent; color: var(--text-muted); padding: 15px; border-radius: 8px; text-align: left; font-family: var(--font-body); font-weight: 600; cursor: pointer; transition: all 0.2s;">
+              <i class="fa-solid fa-briefcase" style="width: 25px;"></i> Gestión de Empresa
+            </button>
+          </div>
+
+          <div style="margin-top: auto;">
+            <button class="btn btn-danger" id="btnCloseGrowShop"
+              style="width: 100%; justify-content: center; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #ef4444;">
+              <i class="fa-solid fa-right-from-bracket"></i> Salir
+            </button>
+          </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <div class="gs-content-area"
+          style="flex: 1; position: relative; padding: 30px; overflow: hidden; background: linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(0,0,0,0) 50%, rgba(168, 85, 247, 0.05) 100%);">
+
+          <!-- VIEW: WHOLESALE MAP -->
+          <section id="gsViewWholesale" class="gs-view active"
+            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; padding: 30px; opacity: 1; transition: opacity 0.3s; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px;">
+              <h2 style="font-family: var(--font-heading); color: white; font-size: 1.8rem;">Suministros Mayoristas</h2>
+              <div class="gs-society-funds"
+                style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 10px 20px; border-radius: 8px; color: #10b981; font-weight: bold; display: flex; align-items: center; gap: 10px;">
+                <i class="fa-solid fa-wallet"></i> <span id="gsSocietyMoney">$0</span>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 20px; height: calc(100% - 70px);">
+              <!-- Items Grid -->
+              <div id="gsWholesaleGrid"
+                style="flex: 2; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); grid-auto-rows: min-content; align-content: start; gap: 20px; overflow-y: auto; padding-right: 10px;">
+                <!-- JS Injected Items -->
+              </div>
+
+              <!-- Cart Panel -->
+              <div id="gsCartPanel"
+                style="flex: 1; background: rgba(0,0,0,0.3); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 12px; display: flex; flex-direction: column;">
+                <h3
+                  style="padding: 15px; border-bottom: 1px solid rgba(16, 185, 129, 0.2); color: white; display: flex; justify-content: space-between;">
+                  <i class="fa-solid fa-cart-shopping" style="color: #10b981;"></i> Carrito Logístico
+                </h3>
+
+                <div id="cartList"
+                  style="flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
+                  <p style="color:var(--text-muted); text-align:center; margin-top:20px;">Tu carrito está vacío.</p>
+                </div>
+
+                <div
+                  style="padding: 15px; border-top: 1px solid rgba(16, 185, 129, 0.2); background: rgba(0,0,0,0.5); border-radius: 0 0 12px 12px;">
+                  <div
+                    style="display: flex; justify-content: space-between; margin-bottom: 15px; color: white; font-weight: bold; font-family: var(--font-heading); font-size: 1.2rem;">
+                    <span>Total</span>
+                    <span id="cartTotal" style="color: #10b981;">$0</span>
+                  </div>
+                  <button class="btn btn-primary"
+                    style="width: 100%; justify-content: center; background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #10b981; padding: 15px;"
+                    onclick="checkoutCart()">
+                    <i class="fa-solid fa-truck"></i> Realizar Pedido
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- VIEW: EL COCINERO CRAFTING -->
+          <section id="gsViewCrafting" class="gs-view hidden"
+            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; padding: 30px; opacity: 0; pointer-events: none; transition: opacity 0.3s; display: flex; flex-direction: column;">
+            <div style="margin-bottom: 25px;">
+              <h2
+                style="font-family: var(--font-heading); color: #a855f7; font-size: 1.8rem; filter: drop-shadow(0 0 5px rgba(168,85,247,0.5));">
+                Laboratorio "El Cocinero"</h2>
+              <p style="color: var(--text-muted); font-size: 0.95rem;">Selecciona una receta para procesar los
+                materiales en bruto de la sede.</p>
+            </div>
+
+            <div style="display: flex; gap: 30px; height: calc(100% - 80px);">
+              <!-- Recipe List -->
+              <div
+                style="flex: 1; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; overflow-y: auto; padding: 15px;"
+                id="gsRecipeList">
+                <!-- JS Injected Recipes -->
+              </div>
+
+              <!-- Recipe Details & Craft Act -->
+              <div
+                style="flex: 1.5; background: rgba(0,0,0,0.4); border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 12px; padding: 25px; display: flex; flex-direction: column;"
+                id="gsRecipeDetails">
+                <div style="text-align: center; margin-top: 50px; color: var(--text-muted);">
+                  <i class="fa-solid fa-flask" style="font-size: 4rem; opacity: 0.2; margin-bottom: 20px;"></i>
+                  <h3>Selecciona una receta</h3>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- VIEW: MANAGEMENT -->
+          <section id="gsViewManagement" class="gs-view hidden"
+            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; padding: 30px; opacity: 0; pointer-events: none; transition: opacity 0.3s; display: flex; flex-direction: column;">
+            <div style="margin-bottom: 25px;">
+              <h2
+                style="font-family: var(--font-heading); color: #f59e0b; font-size: 1.8rem; filter: drop-shadow(0 0 5px rgba(245,158,11,0.5));">
+                Gestión de la Empresa</h2>
+              <p style="color: var(--text-muted); font-size: 0.95rem;">Administra las finanzas de la sociedad y la
+                plantilla de empleados.</p>
+            </div>
+
+            <div style="display: flex; gap: 30px; height: calc(100% - 80px);">
+              <!-- Finances Column -->
+              <div
+                style="flex: 1; background: rgba(0,0,0,0.3); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 12px; padding: 25px; display: flex; flex-direction: column;">
+                <h3 style="color: white; margin-bottom: 20px;"><i class="fa-solid fa-piggy-bank"
+                    style="color: #f59e0b;"></i> Finanzas</h3>
+                <div
+                  style="text-align: center; margin-bottom: 30px; padding: 20px; background: rgba(245, 158, 11, 0.1); border-radius: 8px;">
+                  <span style="color: var(--text-muted); font-size: 0.9rem; display: block; margin-bottom: 5px;">Balance
+                    Actual de la Sociedad</span>
+                  <span id="gsSocietyFundsDetail"
+                    style="font-family: var(--font-heading); font-size: 2.5rem; color: #f59e0b; text-shadow: 0 0 10px rgba(245, 158, 11, 0.5);">$0</span>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                  <input type="number" id="gsFundAmount" class="admin-input" placeholder="Cantidad ($)"
+                    style="flex: 1; background: rgba(0,0,0,0.5); border: 1px solid rgba(245, 158, 11, 0.3); color: white; border-radius: 4px; padding: 10px;">
+                </div>
+                <div style="display: flex; gap: 10px;">
+                  <button class="btn"
+                    style="flex: 1; justify-content: center; background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #10b981; padding: 10px; transition: all 0.2s;"
+                    onmouseover="this.style.background='rgba(16,185,129,0.4)'"
+                    onmouseout="this.style.background='rgba(16,185,129,0.2)'" onclick="manageFunds('deposit')">
+                    <i class="fa-solid fa-arrow-down"></i> Depositar
+                  </button>
+                  <button class="btn"
+                    style="flex: 1; justify-content: center; background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #ef4444; padding: 10px; transition: all 0.2s;"
+                    onmouseover="this.style.background='rgba(239,68,68,0.4)'"
+                    onmouseout="this.style.background='rgba(239,68,68,0.2)'" onclick="manageFunds('withdraw')">
+                    <i class="fa-solid fa-arrow-up"></i> Retirar
+                  </button>
+                </div>
+              </div>
+
+              <!-- Employees Column -->
+              <div
+                style="flex: 1.5; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; display: flex; flex-direction: column;">
+                <div
+                  style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
+                  <h3 style="color: white; margin: 0;"><i class="fa-solid fa-users" style="color: #3b82f6;"></i>
+                    Empleados</h3>
+                  <button class="btn btn-primary"
+                    style="background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; color: #3b82f6; padding: 8px 15px; transition: all 0.2s;"
+                    onmouseover="this.style.background='rgba(59,130,246,0.4)'"
+                    onmouseout="this.style.background='rgba(59,130,246,0.2)'" onclick="hireEmployee()">
+                    <i class="fa-solid fa-user-plus"></i> Contratar Cercano
+                  </button>
+                </div>
+                <div id="gsEmployeeList"
+                  style="flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px;">
+                  <p style="color:var(--text-muted); text-align:center; margin-top:20px;">Cargando empleados...</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+        </div>
+      </main>
+    </div>
+
+  </div>
+
+  <!-- ====== PLANT INFO HUD (Phase 4) ====== -->
+  <div id="plantHud"
+    style="display:none; position:fixed; right:30px; top:50%; transform:translateY(-50%); z-index:9998; pointer-events:none;">
+    <div class="plant-panel">
+      <div class="plant-panel-header">
+        <div class="plant-icon">🌿</div>
+        <div class="plant-title-wrap">
+          <span id="plantName" class="plant-name">Marihuana Standard</span>
+          <span id="plantStage" class="plant-stage">Etapa 1/5</span>
+        </div>
+      </div>
+      <div class="plant-bars">
+        <div class="plant-bar-group">
+          <div class="plant-bar-label"><i class="fa-solid fa-seedling"></i> Crecimiento</div>
+          <div class="plant-bar-track">
+            <div id="plantGrowthBar" class="plant-bar-fill plant-bar-growth" style="width:0%"></div>
+          </div>
+          <span id="plantGrowthPct" class="plant-bar-pct">0%</span>
+        </div>
+        <div class="plant-bar-group">
+          <div class="plant-bar-label"><i class="fa-solid fa-droplet"></i> Agua</div>
+          <div class="plant-bar-track">
+            <div id="plantWaterBar" class="plant-bar-fill plant-bar-water" style="width:0%"></div>
+          </div>
+          <span id="plantWaterPct" class="plant-bar-pct">0%</span>
+        </div>
+      </div>
+      <div id="plantHint" class="plant-hint">
+        <span><kbd>E</kbd> Recoger</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js?v=6"></script>
+  <!-- ====== RANK PERMISSIONS MODAL ====== -->
+  <div id="gmRankPermissionsModal" class="hidden"
+    style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:10000; align-items:center; justify-content:center; backdrop-filter:blur(5px);">
+    <div class="gm-panel"
+      style="width:400px; border:1px solid rgba(255,255,255,0.1); box-shadow: 0 0 50px rgba(0,0,0,0.5);">
+      <div class="gm-panel-header" id="permsModalTitle">PERMISOS DEL RANGO</div>
+      <div class="gm-panel-content" style="padding:25px; display:flex; flex-direction:column; gap:20px;">
+        <div id="permsList" style="display:flex; flex-direction:column; gap:12px;">
+          <!-- JS will inject permission rows here -->
+        </div>
+        <div style="display:flex; gap:10px; margin-top:10px;">
+          <button class="btn btn-secondary" style="flex:1; justify-content:center;" id="btnCancelPerms"
+            onclick="closeRankPerms()">CANCELAR</button>
+          <button class="btn btn-primary" style="flex:1; justify-content:center;" id="btnSavePerms">GUARDAR
+            CAMBIOS</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+
+</html>
