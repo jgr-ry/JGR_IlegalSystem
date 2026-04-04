@@ -50,4 +50,8 @@ files {
     'ui/assets/**/*'
 }
 
+escrow_ignore {
+    'config/*'
+}
+
 lua54 'yes'
