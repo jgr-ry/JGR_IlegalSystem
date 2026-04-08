@@ -75,6 +75,13 @@ JGR.RegisterModule("gang_creator_server", function()
         local spec = data.specialization
         local npcName = GenerateNPCName()
 
+        -- Check for existing gang name
+        local existing = MySQL.scalar.await('SELECT name FROM jgr_gangs WHERE name = ?', {gangName})
+        if existing then
+            Bridge.Notify(src, _L('gang_already_exists'), "error")
+            return
+        end
+
         -- Execute query
         MySQL.insert('INSERT INTO jgr_gangs (name, color, ranks, npc_model, npc_name, coords, specialization) VALUES (?, ?, ?, ?, ?, ?, ?)', 
         {gangName, gangColor, ranks, npcModel, npcName, coords, spec}, function(id)

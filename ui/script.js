@@ -3,6 +3,15 @@ let configData = {};
 let translations = {};
 let selectedSpecialization = null;
 
+// Admin Panel Context
+let adminData = null;
+let adminConfig = null;
+let adminLocales = null;
+
+// Documents State
+let currentDocuments = [];
+let editingDocId = null;
+
 // DOM Elements
 const doc = document;
 const app = doc.getElementById('app');
@@ -82,8 +91,7 @@ window.addEventListener('message', (event) => {
     // Phase 3: Admin Panel
     else if (data.action === "open_admin_panel") {
         adminData = data.gangs;
-        adminConfig = data.config;
-        adminLocales = data.locales;
+        translations = data.translations || {}; // Corrected: use translations from data
         app.classList.remove('hidden');
         showStep('admin');
         renderAdminPanel();
@@ -403,6 +411,11 @@ function applyAdminTranslations() {
     if (translations.table_max) doc.getElementById('th_max').innerText = translations.table_max;
     if (translations.table_actions) doc.getElementById('th_actions').innerText = translations.table_actions;
     if (translations.btn_close) btnCloseAdmin.innerHTML = `${translations.btn_close} <i class="fa-solid fa-xmark"></i>`;
+}
+
+function renderAdminPanel() {
+    applyAdminTranslations();
+    buildAdminTable(adminData);
 }
 
 function buildAdminTable(gangs) {
@@ -830,8 +843,6 @@ const gmBtnSaveDoc = doc.getElementById('gmBtnSaveDoc');
 const gmBtnDeleteDoc = doc.getElementById('gmBtnDeleteDoc');
 const gmDocList = doc.getElementById('gmDocList');
 
-let currentDocuments = [];
-let editingDocId = null;
 
 function renderDocList() {
     if (!gmDocList) return;
