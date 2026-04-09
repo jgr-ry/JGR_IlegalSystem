@@ -7,16 +7,24 @@ let selectedSpecialization = null;
 const doc = document;
 const app = doc.getElementById('app');
 
-// Admin Panel Context
-let adminData = null;
-let adminConfig = null;
-let adminLocales = null;
+/**
+ * Helper to post data to the Lua client.
+ */
+function post(url, data) {
+    if (typeof GetParentResourceName === "undefined") {
+        console.warn(`[NUI] post: GetParentResourceName is not defined. URL: ${url}`);
+        return;
+    }
+    fetch(`https://${GetParentResourceName()}/${url}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json; charset=UTF-8',
+        },
+        body: JSON.stringify(data || {})
+    }).catch(err => console.error(`[NUI] post failed for ${url}:`, err));
+}
 
-// Documents State
-let currentDocuments = [];
-let editingDocId = null;
-
-// Global State
+// Global UI State
 let currentEditGang = null;
 let currentDeleteGang = null;
 let currentGangData = null;
@@ -29,11 +37,22 @@ let deliverySecondsLeft = 0;
 let currentRecipes = {};
 let selectedRecipeId = null;
 
-// DOM Elements
+// Admin Panel State
+let adminData = null;
+let adminConfig = null;
+let adminLocales = null;
+
+// Documents State
+let currentDocuments = [];
+let editingDocId = null;
+
+// DOM Elements: Containers
 const step1 = doc.getElementById('step1');
 const step3 = doc.getElementById('step3');
 const step4 = doc.getElementById('step4');
 const adminPanel = doc.getElementById('adminPanel');
+const gangMenuWrapper = doc.getElementById('gangMenuWrapper');
+const gangMenuContainer = doc.getElementById('gangMenuContainer');
 
 // Translation Elements Step 1
 const elTitle1 = doc.getElementById('ui_title');
@@ -56,12 +75,12 @@ const elTitle4 = doc.getElementById('ui_finish_title');
 const elDesc4 = doc.getElementById('ui_finish_desc');
 const btnFinish = doc.getElementById('btnFinish');
 
-// Dynamic Containers
+// Dynamic Selection Containers
 const permsList = doc.getElementById('permissionsList');
 const specGrid = doc.getElementById('specializationsGrid');
 const gangColor = doc.getElementById('gangColor');
 
-// Admin Panel Elements
+// Admin Panel Components
 const btnCloseAdmin = doc.getElementById('btnCloseAdmin');
 const editModal = doc.getElementById('editLimitModal');
 const editModalInput = doc.getElementById('editModalInput');
@@ -71,12 +90,12 @@ const deleteModal = doc.getElementById('deleteConfirmModal');
 const btnCancelDelete = doc.getElementById('btnCancelDelete');
 const btnConfirmDelete = doc.getElementById('btnConfirmDelete');
 
-// Gang Management Elements
+// Gang Management Components
 const btnBackGM = doc.getElementById('btnBackGangMenu');
 const btnCloseGM = doc.getElementById('btnCloseGangMenu');
 const navButtons = doc.querySelectorAll('.gm-nav-btn');
 
-// Document Elements
+// Document Components
 const btnNewDoc = doc.getElementById('btnNewDoc');
 const gmDocTitle = doc.getElementById('gmDocTitle');
 const gmDocContent = doc.getElementById('gmDocContent');
@@ -84,7 +103,7 @@ const gmBtnSaveDoc = doc.getElementById('gmBtnSaveDoc');
 const gmBtnDeleteDoc = doc.getElementById('gmBtnDeleteDoc');
 const gmDocList = doc.getElementById('gmDocList');
 
-// Map Elements
+// Map Components
 const mapContainer = doc.getElementById('gmMapContainer');
 const mapBg = doc.getElementById('gmMapBg');
 const mapMock = doc.getElementById('gmMapMockPoint');
@@ -93,14 +112,16 @@ let mapPanning = false;
 let mapStartX = 0, mapStartY = 0;
 let mapTransX = 0, mapTransY = 0;
 
-// Config Tab Elements
+// Config Tab Components
 const btnInviteMember = doc.getElementById('btnInviteMember');
 const btnManageRanks = doc.getElementById('btnManageRanks');
 const btnPlaceStash = doc.getElementById('btnPlaceStash');
 const btnPlaceGarage = doc.getElementById('btnPlaceGarage');
 const btnPlaceBoss = doc.getElementById('btnPlaceBoss');
+const gmConfigMembersList = doc.getElementById('gmConfigMembersList');
+const gmRanksList = doc.getElementById('gmRanksList');
 
-// Grow Shop Module Elements
+// Grow Shop Components
 const growShopWrapper = doc.getElementById('growShopWrapper');
 const btnCloseGrowShop = doc.getElementById('btnCloseGrowShop');
 const gsNavBtns = doc.querySelectorAll('.gs-nav-btn');
@@ -109,8 +130,10 @@ const gsWholesaleGrid = doc.getElementById('gsWholesaleGrid');
 const gsRecipeList = doc.getElementById('gsRecipeList');
 const gsRecipeDetails = doc.getElementById('gsRecipeDetails');
 const gsSocietyMoney = doc.getElementById('gsSocietyMoney');
+const gsFundAmount = doc.getElementById('gsFundAmount');
+const gsEmployeeList = doc.getElementById('gsEmployeeList');
 
-// Cart State Logic
+// Cart Sub-Module Logic
 const cartState = {
     items: {} // key: item_name, value: {qty, price, label}
 };
@@ -124,8 +147,7 @@ const reactiveCart = new Proxy(cartState, {
     }
 });
 
-
-// Data state
+// Internal Creator Data
 let ranksData = {
     "Jefe": {}
 };
