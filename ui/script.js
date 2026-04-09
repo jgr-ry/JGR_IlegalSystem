@@ -3,6 +3,10 @@ let configData = {};
 let translations = {};
 let selectedSpecialization = null;
 
+// Global Context
+const doc = document;
+const app = doc.getElementById('app');
+
 // Admin Panel Context
 let adminData = null;
 let adminConfig = null;
@@ -12,9 +16,20 @@ let adminLocales = null;
 let currentDocuments = [];
 let editingDocId = null;
 
+// Global State
+let currentEditGang = null;
+let currentDeleteGang = null;
+let currentGangData = null;
+let currentPlayerPerms = null;
+let gmLocales = {};
+let currentEditingRank = null;
+let currentGangRanks = {};
+let deliveryTotalSeconds = 0;
+let deliverySecondsLeft = 0;
+let currentRecipes = {};
+let selectedRecipeId = null;
+
 // DOM Elements
-const doc = document;
-const app = doc.getElementById('app');
 const step1 = doc.getElementById('step1');
 const step3 = doc.getElementById('step3');
 const step4 = doc.getElementById('step4');
@@ -45,6 +60,69 @@ const btnFinish = doc.getElementById('btnFinish');
 const permsList = doc.getElementById('permissionsList');
 const specGrid = doc.getElementById('specializationsGrid');
 const gangColor = doc.getElementById('gangColor');
+
+// Admin Panel Elements
+const btnCloseAdmin = doc.getElementById('btnCloseAdmin');
+const editModal = doc.getElementById('editLimitModal');
+const editModalInput = doc.getElementById('editModalInput');
+const btnCancelEdit = doc.getElementById('btnCancelEdit');
+const btnConfirmEdit = doc.getElementById('btnConfirmEdit');
+const deleteModal = doc.getElementById('deleteConfirmModal');
+const btnCancelDelete = doc.getElementById('btnCancelDelete');
+const btnConfirmDelete = doc.getElementById('btnConfirmDelete');
+
+// Gang Management Elements
+const btnBackGM = doc.getElementById('btnBackGangMenu');
+const btnCloseGM = doc.getElementById('btnCloseGangMenu');
+const navButtons = doc.querySelectorAll('.gm-nav-btn');
+
+// Document Elements
+const btnNewDoc = doc.getElementById('btnNewDoc');
+const gmDocTitle = doc.getElementById('gmDocTitle');
+const gmDocContent = doc.getElementById('gmDocContent');
+const gmBtnSaveDoc = doc.getElementById('gmBtnSaveDoc');
+const gmBtnDeleteDoc = doc.getElementById('gmBtnDeleteDoc');
+const gmDocList = doc.getElementById('gmDocList');
+
+// Map Elements
+const mapContainer = doc.getElementById('gmMapContainer');
+const mapBg = doc.getElementById('gmMapBg');
+const mapMock = doc.getElementById('gmMapMockPoint');
+let mapScale = 1;
+let mapPanning = false;
+let mapStartX = 0, mapStartY = 0;
+let mapTransX = 0, mapTransY = 0;
+
+// Config Tab Elements
+const btnInviteMember = doc.getElementById('btnInviteMember');
+const btnManageRanks = doc.getElementById('btnManageRanks');
+const btnPlaceStash = doc.getElementById('btnPlaceStash');
+const btnPlaceGarage = doc.getElementById('btnPlaceGarage');
+const btnPlaceBoss = doc.getElementById('btnPlaceBoss');
+
+// Grow Shop Module Elements
+const growShopWrapper = doc.getElementById('growShopWrapper');
+const btnCloseGrowShop = doc.getElementById('btnCloseGrowShop');
+const gsNavBtns = doc.querySelectorAll('.gs-nav-btn');
+const gsViews = doc.querySelectorAll('.gs-view');
+const gsWholesaleGrid = doc.getElementById('gsWholesaleGrid');
+const gsRecipeList = doc.getElementById('gsRecipeList');
+const gsRecipeDetails = doc.getElementById('gsRecipeDetails');
+const gsSocietyMoney = doc.getElementById('gsSocietyMoney');
+
+// Cart State Logic
+const cartState = {
+    items: {} // key: item_name, value: {qty, price, label}
+};
+const reactiveCart = new Proxy(cartState, {
+    set(target, property, value) {
+        target[property] = value;
+        if (property === 'items') {
+            renderCartUI();
+        }
+        return true;
+    }
+});
 
 
 // Data state
@@ -396,7 +474,6 @@ btnFinish.onclick = () => {
 };
 
 // Admin Panel Logic
-const btnCloseAdmin = doc.getElementById('btnCloseAdmin');
 btnCloseAdmin.onclick = () => {
     doc.body.style.display = "none";
     post('closeAdminPanel');
@@ -460,12 +537,6 @@ function buildAdminTable(gangs) {
 }
 
 // Modal Logic
-let currentEditGang = null;
-const editModal = doc.getElementById('editLimitModal');
-const editModalInput = doc.getElementById('editModalInput');
-const btnCancelEdit = doc.getElementById('btnCancelEdit');
-const btnConfirmEdit = doc.getElementById('btnConfirmEdit');
-
 window.openEditModal = function (gangName, currentMax) {
     currentEditGang = gangName;
     doc.getElementById('editModalGangName').innerText = gangName;
@@ -504,11 +575,6 @@ btnConfirmEdit.onclick = () => {
 }
 
 // Modal Logic Delete
-let currentDeleteGang = null;
-const deleteModal = doc.getElementById('deleteConfirmModal');
-const btnCancelDelete = doc.getElementById('btnCancelDelete');
-const btnConfirmDelete = doc.getElementById('btnConfirmDelete');
-
 window.openDeleteModal = function (gangName) {
     currentDeleteGang = gangName;
     doc.getElementById('deleteModalGangName').innerText = gangName;
@@ -540,9 +606,6 @@ btnConfirmDelete.onclick = () => {
 /* ====================================================
    PHASE 4: GANG MANAGEMENT MENU (SPA LOGIC)
 ==================================================== */
-let currentGangData = null;
-let currentPlayerPerms = null;
-let gmLocales = {};
 
 function applyGangMenuTranslations() {
     if (!gmLocales) return;
@@ -708,8 +771,6 @@ function renderRanksPanel(ranks) {
     }
 }
 
-let currentEditingRank = null;
-let currentGangRanks = {};
 
 function openRankPerms(rankName) {
     currentEditingRank = rankName;
@@ -774,7 +835,6 @@ doc.getElementById('btnSavePerms').onclick = () => {
 };
 
 // Nav Logic
-const navButtons = doc.querySelectorAll('.gm-nav-btn');
 navButtons.forEach(btn => {
     btn.addEventListener('click', () => {
         const targetId = btn.getAttribute('data-target');
@@ -808,18 +868,16 @@ function switchGMView(viewId) {
     }
 
     // Toggle back button visibility depending on active view
-    const backBtn = doc.getElementById('btnBackGangMenu');
-    if (backBtn) {
+    if (btnBackGM) {
         if (viewId === 'gmViewDashboard') {
-            backBtn.classList.add('hidden');
+            btnBackGM.classList.add('hidden');
         } else {
-            backBtn.classList.remove('hidden');
+            btnBackGM.classList.remove('hidden');
         }
     }
 }
 
 // Back Button logic
-const btnBackGM = doc.getElementById('btnBackGangMenu');
 if (btnBackGM) {
     btnBackGM.onclick = () => {
         switchGMView('gmViewDashboard');
@@ -829,20 +887,13 @@ if (btnBackGM) {
 // Close Menu Btn
 doc.getElementById('btnCloseGangMenu').onclick = () => {
     doc.body.style.display = "none";
-    doc.getElementById('gangMenuWrapper').classList.add('hidden');
+    if (doc.getElementById('gangMenuWrapper')) doc.getElementById('gangMenuWrapper').classList.add('hidden');
     post('closeUI');
 };
 
 /* ====================================================
    DOCUMENTS TAB LOGIC
 ==================================================== */
-const btnNewDoc = doc.getElementById('btnNewDoc');
-const gmDocTitle = doc.getElementById('gmDocTitle');
-const gmDocContent = doc.getElementById('gmDocContent');
-const gmBtnSaveDoc = doc.getElementById('gmBtnSaveDoc');
-const gmBtnDeleteDoc = doc.getElementById('gmBtnDeleteDoc');
-const gmDocList = doc.getElementById('gmDocList');
-
 
 function renderDocList() {
     if (!gmDocList) return;
@@ -910,14 +961,6 @@ if (gmBtnDeleteDoc) {
 /* ====================================================
    TERRITORIES MAP LOGIC (DRAG & ZOOM)
 ==================================================== */
-const mapContainer = doc.getElementById('gmMapContainer');
-const mapBg = doc.getElementById('gmMapBg');
-const mapMock = doc.getElementById('gmMapMockPoint');
-
-let mapScale = 1;
-let mapPanning = false;
-let mapStartX = 0, mapStartY = 0;
-let mapTransX = 0, mapTransY = 0;
 
 if (mapContainer && mapBg) {
     // Zoom
@@ -958,14 +1001,12 @@ function applyMapTransform() {
 /* ====================================================
    CONFIG TAB LOGIC
 ==================================================== */
-const btnInviteMember = doc.getElementById('btnInviteMember');
 if (btnInviteMember) {
     btnInviteMember.onclick = () => {
         post('inviteMemberReq');
     }
 }
 
-const btnManageRanks = doc.getElementById('btnManageRanks');
 if (btnManageRanks) {
     btnManageRanks.onclick = () => {
         post('manageRanksReq');
@@ -973,17 +1014,14 @@ if (btnManageRanks) {
 }
 
 // Config Placement Points
-const btnPlaceStash = doc.getElementById('btnPlaceStash');
 if (btnPlaceStash) {
     btnPlaceStash.onclick = () => post('placePoint', { type: 'stash' });
 }
 
-const btnPlaceGarage = doc.getElementById('btnPlaceGarage');
 if (btnPlaceGarage) {
     btnPlaceGarage.onclick = () => post('placePoint', { type: 'garage' });
 }
 
-const btnPlaceBoss = doc.getElementById('btnPlaceBoss');
 if (btnPlaceBoss) {
     btnPlaceBoss.onclick = () => post('placePoint', { type: 'boss' });
 }
@@ -1025,19 +1063,6 @@ function updateActivitiesUI(gang) {
 /* =========================================================================
    GROW SHOP MODULE (PHASE 6) 
    ========================================================================= */
-
-// DOM Elements
-const growShopWrapper = doc.getElementById('growShopWrapper');
-const btnCloseGrowShop = doc.getElementById('btnCloseGrowShop');
-const gsNavBtns = doc.querySelectorAll('.gs-nav-btn');
-const gsViews = doc.querySelectorAll('.gs-view');
-const gsWholesaleGrid = doc.getElementById('gsWholesaleGrid');
-const gsRecipeList = doc.getElementById('gsRecipeList');
-const gsRecipeDetails = doc.getElementById('gsRecipeDetails');
-const gsSocietyMoney = doc.getElementById('gsSocietyMoney');
-
-let currentRecipes = {};
-let selectedRecipeId = null;
 
 // Listeners
 if (btnCloseGrowShop) {
@@ -1169,9 +1194,6 @@ window.addEventListener('message', (event) => {
     }
 });
 
-let deliveryTotalSeconds = 0;
-let deliverySecondsLeft = 0;
-
 function updateDeliveryHud() {
     const countdown = doc.getElementById('deliveryCountdown');
     const progressBar = doc.getElementById('deliveryProgressBar');
@@ -1212,21 +1234,6 @@ function populateWholesale(items) {
         gsWholesaleGrid.appendChild(card);
     });
 }
-
-// --- Cart Reactivity Proxy ---
-const cartState = {
-    items: {} // key: item_name, value: {qty, price, label}
-};
-
-const reactiveCart = new Proxy(cartState, {
-    set(target, property, value) {
-        target[property] = value;
-        if (property === 'items') {
-            renderCartUI();
-        }
-        return true;
-    }
-});
 
 function addToCart(itemName, price, label) {
     const qtyInput = doc.getElementById(`qty_buy_${itemName}`);
