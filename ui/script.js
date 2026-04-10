@@ -842,19 +842,21 @@ function closeRankPerms() {
     }
 }
 
-doc.getElementById('btnSavePerms').onclick = () => {
-    if (!currentEditingRank) return;
+if (doc.getElementById('btnSavePerms')) {
+    doc.getElementById('btnSavePerms').onclick = () => {
+        if (!currentEditingRank) return;
 
-    const newPerms = {
-        manage_members: doc.getElementById('perm_manage_members').checked,
-        manage_points: doc.getElementById('perm_manage_points').checked,
-        manage_ranks: doc.getElementById('perm_manage_ranks').checked,
-        manage_docs: doc.getElementById('perm_manage_docs').checked
+        const newPerms = {
+            manage_members: doc.getElementById('perm_manage_members').checked,
+            manage_points: doc.getElementById('perm_manage_points').checked,
+            manage_ranks: doc.getElementById('perm_manage_ranks').checked,
+            manage_docs: doc.getElementById('perm_manage_docs').checked
+        };
+
+        post('updateRankPermsReq', { rank: currentEditingRank, permissions: newPerms });
+        closeRankPerms();
     };
-
-    post('updateRankPermsReq', { rank: currentEditingRank, permissions: newPerms });
-    closeRankPerms();
-};
+}
 
 // Nav Logic
 navButtons.forEach(btn => {
@@ -907,11 +909,13 @@ if (btnBackGM) {
 }
 
 // Close Menu Btn
-doc.getElementById('btnCloseGangMenu').onclick = () => {
-    doc.body.style.display = "none";
-    if (doc.getElementById('gangMenuWrapper')) doc.getElementById('gangMenuWrapper').classList.add('hidden');
-    post('closeUI');
-};
+if (doc.getElementById('btnCloseGangMenu')) {
+    doc.getElementById('btnCloseGangMenu').onclick = () => {
+        doc.body.style.display = "none";
+        if (doc.getElementById('gangMenuWrapper')) doc.getElementById('gangMenuWrapper').classList.add('hidden');
+        post('closeUI');
+    };
+}
 
 /* ====================================================
    DOCUMENTS TAB LOGIC
