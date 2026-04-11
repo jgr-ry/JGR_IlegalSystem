@@ -8,20 +8,56 @@ const doc = document;
 const app = doc.getElementById('app');
 
 /**
- * Helper to post data to the Lua client.
+ * NUI → cliente Lua. FiveM expone GetParentResourceName como global (no siempre en window).
+ * Había una segunda función `post` más abajo que sobrescribía esta y usaba window.GetParentResourceName → undefined → ningún botón funcionaba.
  */
+function getNuiResourceName() {
+    try {
+        if (typeof GetParentResourceName === 'function') return GetParentResourceName();
+    } catch (e) { /* ignore */ }
+    try {
+        if (typeof window !== 'undefined' && typeof window.GetParentResourceName === 'function') {
+            return window.GetParentResourceName();
+        }
+    } catch (e2) { /* ignore */ }
+    try {
+        const host = typeof window !== 'undefined' && window.location && window.location.hostname;
+        if (host && /^cfx-nui-/i.test(host)) {
+            return host.replace(/^cfx-nui-/i, '');
+        }
+    } catch (e3) { /* ignore */ }
+    return '';
+}
+
 function post(url, data) {
-    if (typeof GetParentResourceName === "undefined") {
-        console.warn(`[NUI] post: GetParentResourceName is not defined. URL: ${url}`);
+    const name = getNuiResourceName();
+    if (!name) {
+        console.error('[JGR NUI] GetParentResourceName no disponible; no se puede llamar a', url);
         return;
     }
-    fetch(`https://${GetParentResourceName()}/${url}`, {
+    fetch(`https://${name}/${url}`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json; charset=UTF-8',
-        },
-        body: JSON.stringify(data || {})
-    }).catch(err => console.error(`[NUI] post failed for ${url}:`, err));
+        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+        body: JSON.stringify(data != null ? data : {})
+    }).catch(err => console.error('[JGR NUI] post', url, err));
+}
+window.post = post;
+
+/** Respuesta JSON del callback NUI (coords, etc.) */
+async function fetchNui(url, data) {
+    const name = getNuiResourceName();
+    if (!name) return null;
+    try {
+        const res = await fetch(`https://${name}/${url}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+            body: JSON.stringify(data != null ? data : {})
+        });
+        return await res.json();
+    } catch (e) {
+        console.error('[JGR NUI] fetchNui', url, e);
+        return null;
+    }
 }
 
 // Global UI State
@@ -45,6 +81,16 @@ let adminLocales = null;
 // Documents State
 let currentDocuments = [];
 let editingDocId = null;
+/** false hasta pulsar «Nuevo» o elegir un archivo de la lista */
+let docComposerActive = false;
+
+// Territories / zone state
+let currentTerritories = [];
+let editingTerrId = null;
+let currentControlZone = null;
+let currentRankOrder = [];
+let lastPlayerWorldCoords = null;
+let territoryCoordsPollId = null;
 
 // DOM Elements: Containers
 const step1 = doc.getElementById('step1');
@@ -105,8 +151,10 @@ const gmDocList = doc.getElementById('gmDocList');
 
 // Map Components
 const mapContainer = doc.getElementById('gmMapContainer');
+const mapScroll = doc.getElementById('gmMapScroll');
 const mapBg = doc.getElementById('gmMapBg');
-const mapMock = doc.getElementById('gmMapMockPoint');
+const territoryPins = doc.getElementById('gmTerritoryPins');
+const gmZoneCircleSvg = doc.getElementById('gmZoneCircleSvg');
 let mapScale = 1;
 let mapPanning = false;
 let mapStartX = 0, mapStartY = 0;
@@ -116,7 +164,9 @@ let mapTransX = 0, mapTransY = 0;
 const btnInviteMember = doc.getElementById('btnInviteMember');
 const btnManageRanks = doc.getElementById('btnManageRanks');
 const btnPlaceStash = doc.getElementById('btnPlaceStash');
-const btnPlaceGarage = doc.getElementById('btnPlaceGarage');
+const btnPlaceGarageMenu = doc.getElementById('btnPlaceGarageMenu');
+const btnPlaceGarageSpawn = doc.getElementById('btnPlaceGarageSpawn');
+const btnPlaceGarageStore = doc.getElementById('btnPlaceGarageStore');
 const btnPlaceBoss = doc.getElementById('btnPlaceBoss');
 const gmConfigMembersList = doc.getElementById('gmConfigMembersList');
 const gmRanksList = doc.getElementById('gmRanksList');
@@ -166,18 +216,21 @@ window.addEventListener('message', (event) => {
         buildPermissions(configData.BasePermissions);
 
         showStep(1);
+        if (app) app.style.display = "flex";
         doc.body.style.display = "flex";
     }
     else if (data.action === "open_specialization_step") {
         buildSpecializations(data.specializations);
 
         showStep(3);
+        if (app) app.style.display = "flex";
         doc.body.style.display = "flex";
     }
     // Phase 1.5: 3D Control Prompt
     else if (data.action === "open_step_2_controls") {
         showStep(0); // Hide all steps
         doc.getElementById('step2Controls').classList.remove('hidden');
+        if (app) app.style.display = "flex";
         app.style.background = "transparent";
         app.style.backdropFilter = "none";
         doc.body.style.display = "flex";
@@ -193,34 +246,135 @@ window.addEventListener('message', (event) => {
         adminData = data.gangs;
         translations = data.translations || {}; // Corrected: use translations from data
         app.classList.remove('hidden');
+        if (app) app.style.display = "flex";
         showStep('admin');
         renderAdminPanel();
         doc.body.style.display = "flex";
     }
     // Phase 4: Gang Management Menu
     else if (data.action === "open_gang_menu") {
+        if (app) app.style.display = "flex";
         app.style.background = "transparent";
         app.style.backdropFilter = "none";
         app.classList.remove('hidden');
         showStep('gangMenu');
-        populateGangMenu(data.gang, data.permissions, data.translations);
+        populateGangMenu(data.gang, data.permissions, data.translations, { preserveView: false });
         doc.body.style.display = "flex";
+    }
+    else if (data.action === 'gang_menu_sync') {
+        if (!data.gang) return;
+        populateGangMenu(data.gang, data.permissions, data.translations, { preserveView: true });
     }
     // Hide gang menu (called from Lua when opening dialogs)
     else if (data.action === "hide_gang_menu") {
+        stopTerritoryCoordsPoll();
         doc.getElementById('gangMenuWrapper').classList.add('hidden');
         doc.body.style.display = "none";
     }
     // Update ranks panel (instant visual refresh after create/delete)
     else if (data.action === "update_ranks") {
-        renderRanksPanel(data.ranks || {});
+        currentGangRanks = data.ranks || {};
+        currentRankOrder = computeRankOrder(currentGangRanks);
+        renderRanksPanel(currentGangRanks);
+        fillInviteRankSelect();
+    }
+    else if (data.action === "update_control_zone") {
+        currentControlZone = data.zone || null;
+        if (currentGangData) {
+            currentGangData.control_zone = currentControlZone;
+            if (!currentGangData.stats) currentGangData.stats = {};
+            currentGangData.stats.control_zone = currentControlZone;
+            currentGangData.territories = currentControlZone ? 1 : 0;
+        }
+        const tc = doc.getElementById('gmTerritoryCount');
+        if (tc) tc.innerText = currentControlZone ? '1' : '0';
+        syncZonePanelFromState();
+        renderTerritoryPins();
     }
     // Update documents panel
     else if (data.action === "update_documents") {
         currentDocuments = data.documents || [];
         renderDocList();
     }
+    else if (data.action === "update_territories") {
+        currentTerritories = data.territories || [];
+        const c = data.count != null ? data.count : currentTerritories.length;
+        const tc = doc.getElementById('gmTerritoryCount');
+        if (tc && !currentControlZone) tc.innerText = c;
+        renderTerritoryPins();
+    }
+    else if (data.action === 'show_placement_hint') {
+        doc.body.style.display = 'flex';
+        const wrap = doc.getElementById('jgrPlacementHint');
+        const t = doc.getElementById('jgrPlacementHintTitle');
+        const s = doc.getElementById('jgrPlacementHintSub');
+        if (t && data.title) t.textContent = data.title;
+        if (s) s.innerHTML = data.subtitle != null ? data.subtitle : '<kbd>E</kbd> Confirmar · <kbd>ESC</kbd> Cancelar';
+        if (wrap) wrap.classList.remove('hidden');
+    }
+    else if (data.action === 'hide_placement_hint') {
+        const wrap = doc.getElementById('jgrPlacementHint');
+        if (wrap) wrap.classList.add('hidden');
+    }
+    else if (data.action === 'open_gang_garage_standalone') {
+        doc.body.style.display = 'flex';
+        /* #app sigue en flex por CSS y tapa el garaje en CEF (fondo + stacking) */
+        if (app) {
+            app.dataset.jgrGaragePrevDisplay = app.style.display || '';
+            app.style.display = 'none';
+            app.style.pointerEvents = 'none';
+        }
+        openGangGarageStandaloneUI(data.vehicles || []);
+    }
+    else if (data.action === 'hide_gang_garage_standalone') {
+        closeGangGarageStandaloneUI();
+        if (app) {
+            app.style.display = app.dataset.jgrGaragePrevDisplay != null && app.dataset.jgrGaragePrevDisplay !== ''
+                ? app.dataset.jgrGaragePrevDisplay
+                : '';
+            delete app.dataset.jgrGaragePrevDisplay;
+            app.style.pointerEvents = '';
+        }
+        const deliveryHud = doc.getElementById('deliveryHud');
+        const deliveryVisible = deliveryHud && deliveryHud.style.display !== 'none' && deliveryHud.style.display !== '';
+        if (!deliveryVisible) {
+            doc.body.style.display = 'none';
+        }
+    }
 });
+
+function openGangGarageStandaloneUI(vehicles) {
+    const overlay = doc.getElementById('jgrGangGarageOverlay');
+    const listEl = doc.getElementById('jgrGangGarageList');
+    const emptyEl = doc.getElementById('jgrGangGarageEmpty');
+    if (!overlay || !listEl || !emptyEl) return;
+    listEl.innerHTML = '';
+    const arr = Array.isArray(vehicles) ? vehicles : [];
+    emptyEl.style.display = arr.length ? 'none' : 'block';
+    arr.forEach((v, i) => {
+        const idx = i + 1;
+        const plate = (v && v.plate) ? String(v.plate) : '—';
+        const model = (v && v.model != null) ? String(v.model) : '—';
+        const li = doc.createElement('li');
+        const left = doc.createElement('div');
+        left.innerHTML = `<strong>${plate}</strong><div class="jgr-gv-meta">Modelo: ${model}</div>`;
+        const btn = doc.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-primary gm-btn-accent';
+        btn.style.flexShrink = '0';
+        btn.textContent = 'Sacar';
+        btn.onclick = () => post('takeGangGarageVehicle', { index: idx });
+        li.appendChild(left);
+        li.appendChild(btn);
+        listEl.appendChild(li);
+    });
+    overlay.classList.remove('hidden');
+}
+
+function closeGangGarageStandaloneUI() {
+    const overlay = doc.getElementById('jgrGangGarageOverlay');
+    if (overlay) overlay.classList.add('hidden');
+}
 
 // Translation Applier
 function applyTranslations() {
@@ -352,15 +506,6 @@ function showStep(stepNumber) {
     }
 }
 
-// Callbacks to Client
-function post(event, data) {
-    fetch(`https://${window.GetParentResourceName()}/${event}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data || {})
-    }).catch(e => console.log(e));
-}
-
 // Event Listeners
 btnCancel.onclick = () => {
     doc.body.style.display = "none";
@@ -472,6 +617,14 @@ btnContinue1.onclick = () => {
         setTimeout(() => { elNameInput.parentElement.style.animation = ""; }, 500);
         return;
     }
+
+    Object.keys(ranksData).forEach(k => {
+        const low = String(k).toLowerCase();
+        if (low === 'jefe' || low === 'boss') {
+            ranksData[k] = ranksData[k] || {};
+            ranksData[k].isBoss = true;
+        }
+    });
 
     const data = {
         name: name,
@@ -649,6 +802,13 @@ function applyGangMenuTranslations() {
     safeSet('t_terr_header', 'ui_gm_t_terr_header');
     safeSet('t_terr_empty', 'ui_gm_t_terr_empty');
     safeSet('t_terr_desc', 'ui_gm_t_terr_desc');
+    safeSet('t_terr_list_header', 'ui_gm_t_terr_header');
+    safeSet('t_terr_editor_header', 'ui_gm_t_terr_editor');
+    safeSet('t_terr_new_btn', 'ui_gm_t_terr_new');
+    safeSet('t_terr_save_btn', 'ui_gm_t_terr_save');
+    safeSet('t_terr_place_btn', 'ui_gm_t_terr_place');
+    safeSet('t_terr_delete_btn', 'ui_gm_t_terr_delete');
+    safeSet('t_terr_influence_lbl', 'ui_gm_t_terr_influence');
 
     safeSet('t_cam_header', 'ui_gm_t_cam_header');
     safeSet('t_cam_empty', 'ui_gm_t_cam_empty');
@@ -658,25 +818,180 @@ function applyGangMenuTranslations() {
     safeSet('t_doc_new', 'ui_gm_t_doc_new');
     safeSet('t_doc_viewer', 'ui_gm_t_doc_viewer');
     safeSet('t_doc_save', 'ui_gm_t_doc_save');
+    const phTitle = doc.getElementById('gmDocPlaceholderTitle');
+    if (phTitle && gmLocales.ui_gm_doc_placeholder_title) phTitle.textContent = gmLocales.ui_gm_doc_placeholder_title;
+    const mh = doc.getElementById('gmMapHudTitle');
+    const ms = doc.getElementById('gmMapHudSub');
+    if (mh && gmLocales.ui_gm_map_hud_title) mh.textContent = gmLocales.ui_gm_map_hud_title;
+    if (ms && gmLocales.ui_gm_map_hud_sub) ms.textContent = gmLocales.ui_gm_map_hud_sub;
 
     safeSet('t_cfg_members', 'ui_gm_t_cfg_members');
     safeSet('t_cfg_invite', 'ui_gm_t_cfg_invite');
     safeSet('t_cfg_settings', 'ui_gm_t_cfg_settings');
+    safeSet('t_terr_list_header', 'ui_gm_t_zone_header');
+    safeSet('t_terr_live_pos', 'ui_gm_t_zone_live');
+    safeSet('t_terr_zone_hint', 'ui_gm_t_zone_hint');
+    safeSet('t_terr_radius_lbl', 'ui_gm_t_zone_radius');
+    safeSet('t_terr_saved_label', 'ui_gm_t_zone_saved');
+    safeSet('t_terr_center_map', 'ui_gm_t_zone_center');
+    safeSet('t_terr_save_zone', 'ui_gm_t_zone_save');
 }
 
-function populateGangMenu(gang, perms, translationsData) {
+function hexToRgbCss(hex) {
+    if (!hex || typeof hex !== 'string') return '168, 85, 247';
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+    if (!m) return '168, 85, 247';
+    return `${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}`;
+}
+
+function worldToMapPercent(wx, wy) {
+    const minX = -4000, maxX = 4500;
+    const minY = -8000, maxY = 4200;
+    const nx = Math.max(0, Math.min(1, (wx - minX) / (maxX - minX)));
+    const ny = Math.max(0, Math.min(1, 1 - (wy - minY) / (maxY - minY)));
+    return { leftPct: nx * 100, topPct: ny * 100 };
+}
+
+/** Solo bloquea UI si el servidor dice explícitamente false (isBoss siempre puede). El servidor sigue validando. */
+function nuiPermAllows(key) {
+    const p = currentPlayerPerms;
+    if (!p) return true;
+    if (p.isBoss === true) return true;
+    if (p[key] === false) return false;
+    return true;
+}
+
+function applyGmPermissions(perms) {
+    if (perms) currentPlayerPerms = perms;
+    if (!currentPlayerPerms) return;
+    const lock = (gmLocales && gmLocales.ui_gm_perm_lock) || 'Sin permiso';
+    /* No usar disabled/pointer-events: los botones dejaban de disparar el NUI y parecía que «no funcionaba nada». Solo aviso en title. */
+    doc.querySelectorAll('[data-req-perm]').forEach(el => {
+        const key = el.getAttribute('data-req-perm');
+        const ok = nuiPermAllows(key);
+        if (el.tagName === 'INPUT' && el.type === 'range') {
+            el.disabled = !ok;
+            el.style.opacity = ok ? '' : '0.45';
+            el.title = ok ? '' : lock;
+            return;
+        }
+        el.disabled = false;
+        el.style.opacity = ok ? '' : '0.55';
+        el.style.pointerEvents = '';
+        el.title = ok ? (el.getAttribute('data-title-default') || '') : lock;
+    });
+    const docTitle = doc.getElementById('gmDocTitle');
+    const docContent = doc.getElementById('gmDocContent');
+    if (docTitle && docContent) {
+        const canEdit = nuiPermAllows('manage_docs');
+        docTitle.readOnly = !canEdit || !docComposerActive;
+        docContent.readOnly = !canEdit || !docComposerActive;
+    }
+    const terrTitle = doc.getElementById('gmTerrTitle');
+    const terrNotes = doc.getElementById('gmTerrNotes');
+    const terrInf = doc.getElementById('gmTerrInfluence');
+    if (terrTitle && terrNotes && terrInf) {
+        const ok = nuiPermAllows('manage_territories');
+        terrTitle.readOnly = !ok;
+        terrNotes.readOnly = !ok;
+        terrInf.disabled = !ok;
+    }
+    syncDocPlaceholder();
+}
+
+function setDocComposerActive(active) {
+    docComposerActive = !!active;
+    const ph = doc.getElementById('gmDocPlaceholder');
+    const inner = doc.getElementById('gmDocEditorInner');
+    if (ph) ph.classList.toggle('gm-doc-placeholder--hidden', docComposerActive);
+    if (inner) inner.classList.toggle('gm-doc-editor-inner--dimmed', !docComposerActive);
+    const docTitle = doc.getElementById('gmDocTitle');
+    const docContent = doc.getElementById('gmDocContent');
+    if (docTitle && docContent) {
+        const canEdit = nuiPermAllows('manage_docs');
+        docTitle.readOnly = !canEdit || !docComposerActive;
+        docContent.readOnly = !canEdit || !docComposerActive;
+    }
+}
+
+function syncDocPlaceholder() {
+    const ph = doc.getElementById('gmDocPlaceholder');
+    if (!ph) return;
+    const msg = (gmLocales && gmLocales.ui_gm_doc_pick_hint) || 'Elige un documento de la lista o pulsa «Nuevo documento» para empezar.';
+    const sub = ph.querySelector('.gm-doc-placeholder-sub');
+    if (sub) sub.textContent = msg;
+}
+
+function updatePointStatusPills(points) {
+    const pts = points || {};
+    const okLabel = (gmLocales && gmLocales.ui_gm_point_ok) || 'Configurado';
+    const noLabel = (gmLocales && gmLocales.ui_gm_point_pending) || 'Sin colocar';
+    const setPill = (id, type) => {
+        const el = doc.getElementById(id);
+        if (!el) return;
+        const ok = pts[type] && pts[type].x != null;
+        el.textContent = ok ? okLabel : noLabel;
+        el.classList.toggle('gm-point-pill--ok', !!ok);
+        el.classList.toggle('gm-point-pill--no', !ok);
+    };
+    setPill('gmPointPillStash', 'stash');
+    setPill('gmPointPillGarageMenu', 'garage_menu');
+    setPill('gmPointPillGarageSpawn', 'garage_spawn');
+    setPill('gmPointPillGarageStore', 'garage_store');
+    /* Compat: antiguo punto único "garage" cuenta como menú */
+    const elMenu = doc.getElementById('gmPointPillGarageMenu');
+    if (elMenu && pts.garage && pts.garage.x != null && !(pts.garage_menu && pts.garage_menu.x != null)) {
+        elMenu.textContent = okLabel;
+        elMenu.classList.add('gm-point-pill--ok');
+        elMenu.classList.remove('gm-point-pill--no');
+    }
+    setPill('gmPointPillBoss', 'boss');
+}
+
+function populateGangMenu(gang, perms, translationsData, syncOpts) {
+    syncOpts = syncOpts || {};
+    const preserveView = !!syncOpts.preserveView;
+    const activeViewId = preserveView
+        ? (doc.querySelector('.gm-view.active') && doc.querySelector('.gm-view.active').id)
+        : null;
+
     currentGangData = gang;
     currentPlayerPerms = perms;
     gmLocales = translationsData || {};
 
     applyGangMenuTranslations();
 
-    // Load documents
-    currentDocuments = gang.documents || [];
+    const wrap = doc.getElementById('gangMenuWrapper');
+    if (wrap) {
+        const col = gang.color || '#a855f7';
+        wrap.style.setProperty('--gang-color', col);
+        wrap.style.setProperty('--gang-color-rgb', hexToRgbCss(col));
+    }
+
+    // Load documents (si vienen como objeto JSON, evitar .forEach roto)
+    let docs = gang.documents;
+    if (!Array.isArray(docs)) {
+        docs = docs && typeof docs === "object" ? Object.values(docs) : [];
+    }
+    currentDocuments = docs;
     editingDocId = null;
     renderDocList();
     if (gmDocTitle) gmDocTitle.value = '';
     if (gmDocContent) gmDocContent.value = '';
+    setDocComposerActive(false);
+
+    currentTerritories = [];
+    editingTerrId = null;
+    currentControlZone = gang.control_zone || (gang.stats && gang.stats.control_zone) || null;
+    currentRankOrder = (gang.rank_order && gang.rank_order.length)
+        ? gang.rank_order.slice()
+        : computeRankOrder(gang.ranks || {});
+    syncZonePanelFromState();
+    renderTerritoryPins();
+
+    applyGmPermissions(perms);
+    updatePointStatusPills(gang.stats && gang.stats.points);
+    resetTacticalMap(gang.npc_coords);
 
     // Header updates
     doc.getElementById('gmGangName').innerText = gang.name || "BANDA DESCONOCIDA";
@@ -729,26 +1044,47 @@ function populateGangMenu(gang, perms, translationsData) {
         dmList.innerHTML = '<p style="color:var(--text-muted); font-size:0.9rem;">No hay miembros disponibles</p>';
     }
 
-    // Default to Dashboard
-    switchGMView('gmViewDashboard');
+    if (preserveView && activeViewId && doc.getElementById(activeViewId)) {
+        switchGMView(activeViewId);
+    } else {
+        switchGMView('gmViewDashboard');
+    }
 
-    // Load members into config list
+    // Load members into config list (expulsar vía data-jgr-kick + delegación, evita comillas rotas en citizenid)
     const cfgList = doc.getElementById('gmConfigMembersList');
     if (cfgList) {
         cfgList.innerHTML = '';
         if (gang.members && gang.members.length > 0) {
             gang.members.forEach(m => {
-                cfgList.innerHTML += `
-                    <div class="gm-manage-row" style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.05); padding:10px 15px; border-radius:8px;">
-                        <div>
-                            <span style="color:white; font-family:var(--font-heading);">${m.name || m.citizenid}</span><br>
-                            <span class="badge gm-badge-blue mt-1" style="display:inline-block; margin-top:5px;">${m.rank}</span>
-                        </div>
-                        <div style="display:flex; gap:5px;">
-                            <button class="btn btn-danger" onclick="post('kickMemberReq', {id: '${m.citizenid}'})" style="padding:5px 10px; font-size:0.8rem;" title="Expulsar"><i class="fa-solid fa-user-xmark"></i></button>
-                        </div>
-                    </div>
-                `;
+                const row = doc.createElement('div');
+                row.className = 'gm-manage-row';
+                row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.05); padding:10px 15px; border-radius:8px;';
+                const left = doc.createElement('div');
+                const nameEl = doc.createElement('span');
+                nameEl.style.cssText = 'color:white; font-family:var(--font-heading);';
+                nameEl.textContent = m.name || m.citizenid || '—';
+                left.appendChild(nameEl);
+                left.appendChild(doc.createElement('br'));
+                const badge = doc.createElement('span');
+                badge.className = 'badge gm-badge-blue mt-1';
+                badge.style.cssText = 'display:inline-block; margin-top:5px;';
+                badge.textContent = m.rank || '—';
+                left.appendChild(badge);
+                row.appendChild(left);
+                const actions = doc.createElement('div');
+                actions.style.cssText = 'display:flex; gap:5px;';
+                if (nuiPermAllows('manage_members')) {
+                    const kickBtn = doc.createElement('button');
+                    kickBtn.type = 'button';
+                    kickBtn.className = 'btn btn-danger';
+                    kickBtn.style.cssText = 'padding:5px 10px; font-size:0.8rem;';
+                    kickBtn.title = 'Expulsar';
+                    kickBtn.setAttribute('data-jgr-kick', encodeURIComponent(String(m.citizenid || '')));
+                    kickBtn.innerHTML = '<i class="fa-solid fa-user-xmark"></i>';
+                    actions.appendChild(kickBtn);
+                }
+                row.appendChild(actions);
+                cfgList.appendChild(row);
             });
         } else {
             cfgList.innerHTML = '<p style="text-align:center; color:var(--text-muted); font-size:0.9rem;">No hay miembros.</p>';
@@ -758,32 +1094,182 @@ function populateGangMenu(gang, perms, translationsData) {
     // Load ranks into config panel
     currentGangRanks = gang.ranks || {};
     renderRanksPanel(currentGangRanks);
+    fillInviteRankSelect();
+}
+
+function computeRankOrder(ranks) {
+    const keys = Object.keys(ranks || {});
+    if (!keys.length) return [];
+    let boss = keys.find(k => {
+        const r = ranks[k];
+        const n = String(k).toLowerCase();
+        return (r && typeof r === 'object' && r.isBoss) || n === 'jefe' || n === 'boss';
+    });
+    const rest = keys.filter(k => k !== boss).sort((a, b) => String(a).localeCompare(String(b)));
+    const out = [];
+    if (boss) out.push(boss);
+    rest.forEach(k => out.push(k));
+    return out.length ? out : keys.sort((a, b) => String(a).localeCompare(String(b)));
+}
+
+function syncZonePanelFromState() {
+    const rEl = doc.getElementById('gmZoneRadius');
+    const rVal = doc.getElementById('gmZoneRadiusVal');
+    const savedBlock = doc.getElementById('gmZoneSavedBlock');
+    const savedCoords = doc.getElementById('gmZoneCoordsSaved');
+    const savedDate = doc.getElementById('gmZoneSavedDate');
+    const z = currentControlZone;
+    if (rEl && z && z.radius != null) {
+        const rv = Math.max(25, Math.min(400, parseInt(z.radius, 10) || 100));
+        rEl.value = String(rv);
+        if (rVal) rVal.innerText = String(rv);
+    } else if (rEl) {
+        if (rVal) rVal.innerText = rEl.value;
+    }
+    if (savedBlock && savedCoords) {
+        if (z && z.x != null && z.y != null) {
+            savedBlock.style.display = 'block';
+            savedCoords.innerText = `X ${z.x.toFixed(1)}  Y ${z.y.toFixed(1)}  Z ${(z.z != null ? z.z : 0).toFixed(1)}  ·  R ${(z.radius != null ? z.radius : 100)} m`;
+            if (savedDate) savedDate.innerText = z.updated || '';
+        } else {
+            savedBlock.style.display = 'none';
+        }
+    }
+    updateZoneSvg();
+}
+
+function updateZoneSvg() {
+    if (!gmZoneCircleSvg) return;
+    gmZoneCircleSvg.innerHTML = '';
+    const z = currentControlZone;
+    if (!z || z.x == null || z.y == null) return;
+    const c = worldToMapPercent(z.x, z.y);
+    const rad = z.radius != null ? Number(z.radius) : 100;
+    const east = worldToMapPercent(z.x + rad, z.y);
+    let rPct = Math.abs(east.leftPct - c.leftPct);
+    if (rPct < 0.15) rPct = 0.15;
+    if (rPct > 48) rPct = 48;
+    const col = (currentGangData && currentGangData.color) || '#a855f7';
+    const circ = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circ.setAttribute('cx', String(c.leftPct));
+    circ.setAttribute('cy', String(c.topPct));
+    circ.setAttribute('r', String(rPct));
+    circ.setAttribute('fill', hexToSvgFill(col, 0.12));
+    circ.setAttribute('stroke', col);
+    circ.setAttribute('stroke-width', '0.4');
+    circ.setAttribute('stroke-opacity', '0.9');
+    gmZoneCircleSvg.appendChild(circ);
+}
+
+function hexToSvgFill(hex, alpha) {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec((hex || '').trim());
+    if (!m) return `rgba(168,85,247,${alpha})`;
+    return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${alpha})`;
+}
+
+function stopTerritoryCoordsPoll() {
+    if (territoryCoordsPollId) {
+        clearInterval(territoryCoordsPollId);
+        territoryCoordsPollId = null;
+    }
+}
+
+function startTerritoryCoordsPoll() {
+    stopTerritoryCoordsPoll();
+    const tick = async () => {
+        const d = await fetchNui('requestPlayerCoords', {});
+        if (d && d.x != null) {
+            lastPlayerWorldCoords = d;
+            const el = doc.getElementById('gmZoneCoordsLive');
+            if (el) el.innerText = `X ${d.x.toFixed(1)}  Y ${d.y.toFixed(1)}  Z ${d.z.toFixed(1)}`;
+            const tv = doc.getElementById('gmViewTerritories');
+            if (tv && !tv.classList.contains('hidden')) renderTerritoryPins();
+        }
+    };
+    tick();
+    territoryCoordsPollId = setInterval(tick, 500);
+}
+
+function fillInviteRankSelect() {
+    const sel = doc.getElementById('gmInviteRankSelect');
+    if (!sel) return;
+    sel.innerHTML = '';
+    const order = currentRankOrder.length ? currentRankOrder : computeRankOrder(currentGangRanks);
+    order.forEach((name, idx) => {
+        const opt = doc.createElement('option');
+        opt.value = name;
+        opt.textContent = `${idx} — ${name}`;
+        sel.appendChild(opt);
+    });
+}
+
+function showGangModal(el) {
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.style.display = 'flex';
+}
+
+function hideGangModal(el) {
+    if (!el) return;
+    el.classList.add('hidden');
+    el.style.display = 'none';
 }
 
 function renderRanksPanel(ranks) {
     const ranksList = doc.getElementById('gmRanksList');
     if (!ranksList) return;
     ranksList.innerHTML = '';
-    const rankNames = Object.keys(ranks);
+    const rk = ranks || {};
+    const order = (currentRankOrder && currentRankOrder.length)
+        ? currentRankOrder.filter(n => Object.prototype.hasOwnProperty.call(rk, n))
+        : computeRankOrder(rk);
+    const rankNames = order.length ? order : Object.keys(rk);
+    const canRank = nuiPermAllows('manage_ranks');
     if (rankNames.length > 0) {
         rankNames.forEach(rName => {
             const r = ranks[rName];
-            const isBoss = r.isBoss || false;
+            const rn = String(rName).toLowerCase();
+            const isBoss = !!(r && typeof r === 'object' && r.isBoss) || rn === 'jefe' || rn === 'boss';
             const el = document.createElement('div');
             el.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.05); padding:10px 15px; border-radius:8px; border: 1px solid rgba(255,255,255,0.08); transition: all 0.2s;';
-            el.innerHTML = `
-                    <div style="display:flex; align-items:center; gap:10px;">
+            const left = document.createElement('div');
+            left.style.cssText = 'display:flex; align-items:center; gap:10px;';
+            left.innerHTML = `
                         <i class="fa-solid ${isBoss ? 'fa-crown' : 'fa-shield-halved'}" style="color: ${isBoss ? '#f59e0b' : 'var(--gang-color, #a855f7)'}; font-size: 1.1rem;"></i>
                         <div>
-                            <span style="color:white; font-weight:600; font-family:var(--font-heading); font-size:0.95rem;">${rName}</span>
+                            <span style="color:white; font-weight:600; font-family:var(--font-heading); font-size:0.95rem;"></span>
                             ${isBoss ? '<br><span style="color:#f59e0b; font-size:0.7rem; text-transform:uppercase; letter-spacing:1px;">JEFE</span>' : ''}
-                        </div>
-                    </div>
-                    <div style="display:flex; gap:5px;">
-                        ${!isBoss ? `<button class="btn btn-primary" onclick="openRankPerms('${rName}')" style="padding:4px 10px; font-size:0.75rem; background:rgba(255,255,255,0.1);" title="Editar permisos"><i class="fa-solid fa-pen-to-square"></i></button>` : ''}
-                        ${!isBoss ? `<button class="btn btn-danger" onclick="post('deleteRankReq', {rank: '${rName}'})" style="padding:4px 10px; font-size:0.75rem;" title="Eliminar rango"><i class="fa-solid fa-trash"></i></button>` : '<span style="color:var(--text-muted); font-size:0.7rem;">ADMINISTRADOR</span>'}
-                    </div>
-                `;
+                        </div>`;
+            const nameSpan = left.querySelector('span');
+            if (nameSpan) nameSpan.textContent = rName;
+
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex; gap:5px;';
+            if (isBoss) {
+                actions.innerHTML = '<span style="color:var(--text-muted); font-size:0.7rem;">ADMINISTRADOR</span>';
+            } else if (canRank) {
+                const bEdit = document.createElement('button');
+                bEdit.type = 'button';
+                bEdit.className = 'btn btn-primary';
+                bEdit.style.cssText = 'padding:4px 10px; font-size:0.75rem; background:rgba(255,255,255,0.1);';
+                bEdit.title = 'Editar permisos';
+                bEdit.innerHTML = '<i class="fa-solid fa-pen-to-square"></i>';
+                bEdit.onclick = () => openRankPerms(rName);
+                const bDel = document.createElement('button');
+                bDel.type = 'button';
+                bDel.className = 'btn btn-danger';
+                bDel.style.cssText = 'padding:4px 10px; font-size:0.75rem;';
+                bDel.title = 'Eliminar rango';
+                bDel.innerHTML = '<i class="fa-solid fa-trash"></i>';
+                bDel.onclick = () => post('deleteRankReq', { rank: rName });
+                actions.appendChild(bEdit);
+                actions.appendChild(bDel);
+            } else {
+                actions.innerHTML = '<span style="color:var(--text-muted); font-size:0.7rem;">—</span>';
+            }
+
+            el.appendChild(left);
+            el.appendChild(actions);
             el.onmouseenter = () => { el.style.borderColor = 'var(--gang-color, #a855f7)'; };
             el.onmouseleave = () => { el.style.borderColor = 'rgba(255,255,255,0.08)'; };
             ranksList.appendChild(el);
@@ -793,6 +1279,21 @@ function renderRanksPanel(ranks) {
     }
 }
 
+(function bindGangMenuKickDelegation() {
+    const wrap = doc.getElementById('gangMenuWrapper');
+    if (!wrap || wrap.dataset.jgrKickBound) return;
+    wrap.dataset.jgrKickBound = '1';
+    wrap.addEventListener('click', (ev) => {
+        const b = ev.target.closest('button[data-jgr-kick]');
+        if (!b) return;
+        const enc = b.getAttribute('data-jgr-kick');
+        if (!enc) return;
+        try {
+            const id = decodeURIComponent(enc);
+            if (id) post('kickMemberReq', { id });
+        } catch (e) { /* ignore */ }
+    });
+})();
 
 function openRankPerms(rankName) {
     currentEditingRank = rankName;
@@ -807,10 +1308,11 @@ function openRankPerms(rankName) {
 
     const rankData = currentGangRanks[rankName] || {};
     const permissions = [
-        { id: 'manage_members', label: 'Gestionar Miembros', icon: 'fa-users-gear' },
-        { id: 'manage_points', label: 'Gestionar Puntos (Sedes)', icon: 'fa-location-dot' },
-        { id: 'manage_ranks', label: 'Gestionar Rangos', icon: 'fa-layer-group' },
-        { id: 'manage_docs', label: 'Gestionar Documentos', icon: 'fa-file-signature' }
+        { id: 'manage_members', label: 'Gestionar miembros', icon: 'fa-users-gear' },
+        { id: 'manage_points', label: 'Gestionar puntos (sedes)', icon: 'fa-location-dot' },
+        { id: 'manage_ranks', label: 'Gestionar rangos', icon: 'fa-layer-group' },
+        { id: 'manage_docs', label: 'Gestionar documentos', icon: 'fa-file-signature' },
+        { id: 'manage_territories', label: 'Gestionar territorios', icon: 'fa-map-location-dot' }
     ];
 
     permissions.forEach(p => {
@@ -833,6 +1335,7 @@ function openRankPerms(rankName) {
     modal.style.display = 'flex';
     modal.classList.remove('hidden');
 }
+window.openRankPerms = openRankPerms;
 
 function closeRankPerms() {
     const modal = doc.getElementById('gmRankPermissionsModal');
@@ -846,11 +1349,13 @@ if (doc.getElementById('btnSavePerms')) {
     doc.getElementById('btnSavePerms').onclick = () => {
         if (!currentEditingRank) return;
 
+        const gt = id => { const e = doc.getElementById(id); return e ? e.checked : false; };
         const newPerms = {
-            manage_members: doc.getElementById('perm_manage_members').checked,
-            manage_points: doc.getElementById('perm_manage_points').checked,
-            manage_ranks: doc.getElementById('perm_manage_ranks').checked,
-            manage_docs: doc.getElementById('perm_manage_docs').checked
+            manage_members: gt('perm_manage_members'),
+            manage_points: gt('perm_manage_points'),
+            manage_ranks: gt('perm_manage_ranks'),
+            manage_docs: gt('perm_manage_docs'),
+            manage_territories: gt('perm_manage_territories')
         };
 
         post('updateRankPermsReq', { rank: currentEditingRank, permissions: newPerms });
@@ -867,37 +1372,32 @@ navButtons.forEach(btn => {
 });
 
 function switchGMView(viewId) {
-    const views = doc.querySelectorAll('.gm-view');
-
-    // Smooth transition
-    views.forEach(v => {
-        if (v.id !== viewId) {
-            v.style.opacity = '0';
-            v.style.pointerEvents = 'none';
-            setTimeout(() => {
-                if (v.id !== doc.querySelector('.gm-view[style*="opacity: 1"]').id) {
-                    v.classList.add('hidden');
-                }
-            }, 300);
-        }
+    doc.querySelectorAll('.gm-view').forEach(v => {
+        v.classList.add('hidden');
+        v.classList.remove('active');
+        v.style.opacity = '';
+        v.style.pointerEvents = '';
     });
-
     const target = doc.getElementById(viewId);
     if (target) {
         target.classList.remove('hidden');
-        // Trigger reflow
-        void target.offsetWidth;
-        target.style.opacity = '1';
-        target.style.pointerEvents = 'auto';
+        target.classList.add('active');
     }
-
-    // Toggle back button visibility depending on active view
     if (btnBackGM) {
-        if (viewId === 'gmViewDashboard') {
-            btnBackGM.classList.add('hidden');
-        } else {
-            btnBackGM.classList.remove('hidden');
-        }
+        if (viewId === 'gmViewDashboard') btnBackGM.classList.add('hidden');
+        else btnBackGM.classList.remove('hidden');
+    }
+    if (viewId === 'gmViewTerritories') {
+        startTerritoryCoordsPoll();
+        const z = currentControlZone;
+        const center = (lastPlayerWorldCoords && lastPlayerWorldCoords.x != null)
+            ? { x: lastPlayerWorldCoords.x, y: lastPlayerWorldCoords.y, z: lastPlayerWorldCoords.z }
+            : (z && z.x != null ? { x: z.x, y: z.y, z: z.z } : (currentGangData && currentGangData.npc_coords));
+        resetTacticalMap(center);
+        renderTerritoryPins();
+        updateZoneSvg();
+    } else {
+        stopTerritoryCoordsPoll();
     }
 }
 
@@ -911,6 +1411,7 @@ if (btnBackGM) {
 // Close Menu Btn
 if (doc.getElementById('btnCloseGangMenu')) {
     doc.getElementById('btnCloseGangMenu').onclick = () => {
+        stopTerritoryCoordsPoll();
         doc.body.style.display = "none";
         if (doc.getElementById('gangMenuWrapper')) doc.getElementById('gangMenuWrapper').classList.add('hidden');
         post('closeUI');
@@ -943,8 +1444,9 @@ function renderDocList() {
         el.onmouseleave = () => { el.style.borderColor = 'transparent'; el.style.background = 'rgba(255,255,255,0.05)'; };
         el.onclick = () => {
             editingDocId = d.id;
-            if (gmDocTitle) gmDocTitle.value = d.title;
-            if (gmDocContent) gmDocContent.value = d.content;
+            if (gmDocTitle) gmDocTitle.value = d.title || '';
+            if (gmDocContent) gmDocContent.value = d.content || '';
+            setDocComposerActive(true);
         };
         gmDocList.appendChild(el);
     });
@@ -955,6 +1457,7 @@ if (btnNewDoc) {
         editingDocId = null;
         if (gmDocTitle) gmDocTitle.value = '';
         if (gmDocContent) gmDocContent.value = '';
+        setDocComposerActive(true);
         if (gmDocTitle) gmDocTitle.focus();
     };
 }
@@ -981,6 +1484,42 @@ if (gmBtnDeleteDoc) {
         editingDocId = null;
         if (gmDocTitle) gmDocTitle.value = '';
         if (gmDocContent) gmDocContent.value = '';
+        setDocComposerActive(false);
+    };
+}
+
+/* ====================================================
+   ZONA DE CONTROL (mapa + radio)
+==================================================== */
+const gmZoneRadiusEl = doc.getElementById('gmZoneRadius');
+if (gmZoneRadiusEl) {
+    gmZoneRadiusEl.addEventListener('input', () => {
+        const v = doc.getElementById('gmZoneRadiusVal');
+        if (v) v.innerText = gmZoneRadiusEl.value;
+        updateZoneSvg();
+    });
+}
+
+const btnZoneSave = doc.getElementById('btnZoneSave');
+if (btnZoneSave) {
+    btnZoneSave.onclick = () => {
+        const r = gmZoneRadiusEl ? parseInt(gmZoneRadiusEl.value, 10) : 100;
+        post('saveControlZone', { radius: isNaN(r) ? 100 : r });
+    };
+}
+
+const btnZoneCenterMap = doc.getElementById('btnZoneCenterMap');
+if (btnZoneCenterMap) {
+    btnZoneCenterMap.onclick = () => {
+        if (lastPlayerWorldCoords && lastPlayerWorldCoords.x != null) {
+            resetTacticalMap({
+                x: lastPlayerWorldCoords.x,
+                y: lastPlayerWorldCoords.y,
+                z: lastPlayerWorldCoords.z
+            });
+        } else {
+            post('notifyError', { msg: 'Aún no hay posición del jugador; espera un instante.' });
+        }
     };
 }
 
@@ -989,14 +1528,13 @@ if (gmBtnDeleteDoc) {
 ==================================================== */
 
 if (mapContainer && mapBg) {
-    // Zoom
     mapContainer.addEventListener('wheel', (e) => {
         e.preventDefault();
         const zoomAmount = 0.1;
         if (e.deltaY < 0) mapScale = Math.min(mapScale + zoomAmount, 3);
         else mapScale = Math.max(mapScale - zoomAmount, 0.5);
         applyMapTransform();
-    });
+    }, { passive: false });
 
     // Pan
     mapContainer.addEventListener('mousedown', (e) => {
@@ -1020,8 +1558,68 @@ if (mapContainer && mapBg) {
 }
 
 function applyMapTransform() {
-    if (mapBg) mapBg.style.transform = `translate(${mapTransX}px, ${mapTransY}px) scale(${mapScale})`;
-    if (mapMock) mapMock.style.transform = `translate(${mapTransX}px, ${mapTransY}px) scale(${mapScale})`;
+    const t = `translate(${mapTransX}px, ${mapTransY}px) scale(${mapScale})`;
+    if (mapScroll) mapScroll.style.transform = t;
+    else if (mapBg) mapBg.style.transform = t;
+}
+
+/** Centra el mapa táctico en la sede (NPC) de la banda. */
+function resetTacticalMap(npc) {
+    mapScale = 1;
+    mapTransX = 0;
+    mapTransY = 0;
+    applyMapTransform();
+    if (!mapContainer || !npc || npc.x == null || npc.y == null) return;
+    requestAnimationFrame(() => {
+        const rect = mapContainer.getBoundingClientRect();
+        const w = rect.width || 1;
+        const h = rect.height || 1;
+        const { leftPct, topPct } = worldToMapPercent(npc.x, npc.y);
+        const pinX = (leftPct / 100) * w;
+        const pinY = (topPct / 100) * h;
+        mapTransX = w * 0.5 - pinX;
+        mapTransY = h * 0.5 - pinY;
+        applyMapTransform();
+    });
+}
+
+function renderTerritoryPins() {
+    if (!territoryPins) return;
+    territoryPins.innerHTML = '';
+    const npc = currentGangData && currentGangData.npc_coords;
+    if (npc && npc.x != null && npc.y != null) {
+        const { leftPct, topPct } = worldToMapPercent(npc.x, npc.y);
+        const hub = doc.createElement('div');
+        hub.className = 'gm-map-pin gm-map-pin--npc';
+        hub.style.left = `${leftPct}%`;
+        hub.style.top = `${topPct}%`;
+        const lbl = (gmLocales && gmLocales.ui_gm_map_npc_label) || 'SEDE';
+        hub.innerHTML = `<span class="gm-map-pin-dot gm-map-pin-dot--npc"></span><span class="gm-map-pin-label">${lbl}</span>`;
+        hub.title = (gmLocales && gmLocales.ui_gm_map_npc_title) || 'NPC de la banda';
+        territoryPins.appendChild(hub);
+    }
+    const z = currentControlZone;
+    if (z && z.x != null && z.y != null) {
+        const { leftPct, topPct } = worldToMapPercent(z.x, z.y);
+        const pin = doc.createElement('div');
+        pin.className = 'gm-map-pin gm-map-pin--zone-center';
+        pin.style.left = `${leftPct}%`;
+        pin.style.top = `${topPct}%`;
+        pin.innerHTML = `<span class="gm-map-pin-dot" style="background:#38bdf8;box-shadow:0 0 12px #38bdf8;"></span><span class="gm-map-pin-label">ZONA</span>`;
+        pin.title = 'Centro de la zona guardada';
+        territoryPins.appendChild(pin);
+    }
+    if (lastPlayerWorldCoords && lastPlayerWorldCoords.x != null) {
+        const { leftPct, topPct } = worldToMapPercent(lastPlayerWorldCoords.x, lastPlayerWorldCoords.y);
+        const you = doc.createElement('div');
+        you.className = 'gm-map-pin gm-map-pin--you';
+        you.style.left = `${leftPct}%`;
+        you.style.top = `${topPct}%`;
+        you.innerHTML = `<span class="gm-map-pin-dot" style="width:0.65rem;height:0.65rem;background:#22c55e;border:2px solid #fff;"></span><span class="gm-map-pin-label">TÚ</span>`;
+        you.title = 'Tu posición';
+        territoryPins.appendChild(you);
+    }
+    updateZoneSvg();
 }
 
 /* ====================================================
@@ -1029,27 +1627,81 @@ function applyMapTransform() {
 ==================================================== */
 if (btnInviteMember) {
     btnInviteMember.onclick = () => {
-        post('inviteMemberReq');
-    }
+        fillInviteRankSelect();
+        const inp = doc.getElementById('gmInvitePlayerId');
+        if (inp) inp.value = '';
+        showGangModal(doc.getElementById('gmInviteModal'));
+    };
 }
 
 if (btnManageRanks) {
     btnManageRanks.onclick = () => {
-        post('manageRanksReq');
-    }
+        const inp = doc.getElementById('gmNewRankNameInput');
+        if (inp) inp.value = '';
+        showGangModal(doc.getElementById('gmNewRankModal'));
+    };
 }
+
+(function wireGangModals() {
+    const invM = doc.getElementById('gmInviteModal');
+    const btnIc = doc.getElementById('btnInviteCancel');
+    const btnIo = doc.getElementById('btnInviteConfirm');
+    if (btnIc && invM) btnIc.onclick = () => hideGangModal(invM);
+    if (btnIo && invM) btnIo.onclick = () => {
+        const id = doc.getElementById('gmInvitePlayerId');
+        const sel = doc.getElementById('gmInviteRankSelect');
+        const tid = id ? parseInt(id.value, 10) : NaN;
+        const rankName = sel ? sel.value : '';
+        if (!tid || tid < 1) {
+            post('notifyError', { msg: 'Introduce un ID de jugador válido.' });
+            return;
+        }
+        if (!rankName) {
+            post('notifyError', { msg: 'Selecciona un rango.' });
+            return;
+        }
+        post('submitInvite', { targetId: tid, rankName });
+        hideGangModal(invM);
+    };
+
+    const nrM = doc.getElementById('gmNewRankModal');
+    const btnNc = doc.getElementById('btnNewRankCancel');
+    const btnNo = doc.getElementById('btnNewRankConfirm');
+    if (btnNc && nrM) btnNc.onclick = () => hideGangModal(nrM);
+    if (btnNo && nrM) btnNo.onclick = () => {
+        const inp = doc.getElementById('gmNewRankNameInput');
+        const name = inp ? inp.value.trim() : '';
+        if (!name) {
+            post('notifyError', { msg: 'Escribe un nombre para el rango.' });
+            return;
+        }
+        post('submitNewRank', { rankName: name });
+        hideGangModal(nrM);
+    };
+})();
 
 // Config Placement Points
 if (btnPlaceStash) {
     btnPlaceStash.onclick = () => post('placePoint', { type: 'stash' });
 }
 
-if (btnPlaceGarage) {
-    btnPlaceGarage.onclick = () => post('placePoint', { type: 'garage' });
+if (btnPlaceGarageMenu) {
+    btnPlaceGarageMenu.onclick = () => post('placePoint', { type: 'garage_menu' });
+}
+if (btnPlaceGarageSpawn) {
+    btnPlaceGarageSpawn.onclick = () => post('placePoint', { type: 'garage_spawn' });
+}
+if (btnPlaceGarageStore) {
+    btnPlaceGarageStore.onclick = () => post('placePoint', { type: 'garage_store' });
 }
 
 if (btnPlaceBoss) {
     btnPlaceBoss.onclick = () => post('placePoint', { type: 'boss' });
+}
+
+const jgrGangGarageClose = doc.getElementById('jgrGangGarageClose');
+if (jgrGangGarageClose) {
+    jgrGangGarageClose.onclick = () => post('closeGangGarageStandalone', {});
 }
 
 function updateActivitiesUI(gang) {

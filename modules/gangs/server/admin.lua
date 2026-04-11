@@ -2,12 +2,45 @@
 
 JGR.RegisterModule("gang_admin_server", function()
 
-    -- /setgang [ID] [gangName] [rankName]
+    local function isRankBossAdm(rankName, r)
+        if not rankName then return false end
+        if type(r) ~= "table" then
+            local n = string.lower(tostring(rankName))
+            return n == "jefe" or n == "boss"
+        end
+        if r.isBoss then return true end
+        local n = string.lower(tostring(rankName))
+        return n == "jefe" or n == "boss"
+    end
+
+    local function orderedRankNamesAdm(ranks)
+        if type(ranks) ~= "table" then return {} end
+        local bossName = nil
+        local rest = {}
+        for name, data in pairs(ranks) do
+            if isRankBossAdm(name, data) then
+                if not bossName then bossName = name end
+            else
+                rest[#rest + 1] = name
+            end
+        end
+        table.sort(rest)
+        local out = {}
+        if bossName then out[#out + 1] = bossName end
+        for _, n in ipairs(rest) do out[#out + 1] = n end
+        if #out == 0 then
+            for k in pairs(ranks) do out[#out + 1] = k end
+            table.sort(out)
+        end
+        return out
+    end
+
+    -- /setgang [ID] [gangName] [rankIndex] — 0 = jefe, 1 = siguiente, …
     RegisterCommand('setgang', function(source, args)
         local admin = source
         local targetId = tonumber(args[1])
         local gangName = args[2]
-        local rankName = args[3]
+        local rankIdx = tonumber(args[3])
         
         -- Admin Permission Check
         local isAdmin = false
@@ -29,7 +62,7 @@ JGR.RegisterModule("gang_admin_server", function()
             return
         end
         
-        if not targetId or not gangName or not rankName then
+        if not targetId or not gangName or rankIdx == nil then
             Bridge.Notify(admin, _L('invalid_args'), "error")
             return
         end
@@ -55,13 +88,14 @@ JGR.RegisterModule("gang_admin_server", function()
         MySQL.query('SELECT name, ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(result)
             if result and #result > 0 then
                 local ranksData = json.decode(result[1].ranks)
-                
-                -- Check if Rank exists in that gang
-                if not ranksData[rankName] then
-                    Bridge.Notify(admin, _L('rank_not_found', rankName, gangName), "error")
+                if type(ranksData) ~= "table" then ranksData = {} end
+                local ordered = orderedRankNamesAdm(ranksData)
+                local rankName = ordered[rankIdx + 1]
+                if not rankName then
+                    Bridge.Notify(admin, "Índice de rango inválido. Usa 0.." .. tostring(math.max(0, #ordered - 1)) .. " (0 = jefe).", "error")
                     return
                 end
-                
+
                 -- Add to members table
                 MySQL.query('SELECT id FROM jgr_gang_members WHERE citizenid = ? AND gang_name = ?', {citizenid, gangName}, function(memberResult)
                     if memberResult and #memberResult > 0 then
@@ -154,9 +188,13 @@ JGR.RegisterModule("gang_admin_server", function()
         end
 
         if citizenid then
-            MySQL.query('SELECT gang_name FROM jgr_gang_members WHERE citizenid = ?', {citizenid}, function(result)
+            MySQL.query('SELECT gang_name FROM jgr_gang_members WHERE citizenid = ? LIMIT 1', {citizenid}, function(result)
                 if result and #result > 0 then
-                    cb(result[1].gang_name)
+                    local gn = result[1].gang_name
+                    if type(gn) == 'string' then
+                        gn = gn:match('^%s*(.-)%s*$') or gn
+                    end
+                    cb(gn)
                 else
                     cb(nil)
                 end

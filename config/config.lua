@@ -7,6 +7,13 @@ Config.Framework = "qbcore" -- "qbcore", "esx", or "standalone"
 Config.Locale = "es" -- Language
 Config.Debug = true  -- Enable debug commands (/testnpc, /tpnpc) and console prints
 
+--- Inventario de almacén de banda: "ox_inventory" (recomendado) o "qb-inventory"
+Config.GangInventory = "ox_inventory"
+--- Máximo de vehículos guardados por banda (garaje)
+Config.GangGarageMaxVehicles = 8
+--- Garaje en mundo: "ox_lib" = menú contextual (recomendado, evita NUI fantasma) | "nui" = panel HTML
+Config.GangGarageMenuMode = "ox_lib"
+
 -- Gang System Configuration
 Config.GangSystem = {
     CreatorModels = {
