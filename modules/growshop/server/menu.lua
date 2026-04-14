@@ -12,10 +12,21 @@ RegisterNetEvent('JGR_IlegalSystem:Server:CheckoutCart', function(cartData)
 
     if Player.PlayerData.job.name ~= Config.GrowShop.JobName then return end
 
+    if type(cartData) ~= "table" then
+        TriggerClientEvent('QBCore:Notify', src, "Carrito inválido.", "error")
+        return
+    end
+
     local totalCost = 0
     local totalItems = 0
     -- Verify pricing against config
     for itemKey, cartItem in pairs(cartData) do
+        local qty = tonumber(cartItem and cartItem.qty) or 0
+        if qty <= 0 then
+            TriggerClientEvent('QBCore:Notify', src, "Cantidad inválida en el carrito.", "error")
+            return
+        end
+
         local configItem = nil
         for _, wItem in pairs(Config.GrowShop.Wholesale) do
             if wItem.item == itemKey then
@@ -24,8 +35,8 @@ RegisterNetEvent('JGR_IlegalSystem:Server:CheckoutCart', function(cartData)
             end
         end
         if configItem then
-            totalCost = totalCost + (configItem.price * cartItem.qty)
-            totalItems = totalItems + cartItem.qty
+            totalCost = totalCost + (configItem.price * qty)
+            totalItems = totalItems + qty
         else
             TriggerClientEvent('QBCore:Notify', src, "Objeto inválido en el carrito.", "error")
             return
@@ -129,6 +140,11 @@ RegisterNetEvent('JGR_IlegalSystem:Server:CraftGrowItem', function(recipeId, bat
 
     local recipe = Config.GrowShop.Crafting[recipeId]
     if not recipe then return end
+    batches = tonumber(batches) or 0
+    if batches <= 0 then
+        TriggerClientEvent('QBCore:Notify', src, "Cantidad inválida para craftear.", "error")
+        return
+    end
 
     -- Validate if player has all required items in sufficient quantities
     local hasAllItems = true

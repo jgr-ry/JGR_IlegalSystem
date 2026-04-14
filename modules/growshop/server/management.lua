@@ -1,5 +1,20 @@
 local QBCore = exports['qb-core']:GetCoreObject()
 
+local function IsGrowshopManager(Player)
+    if not Player or not Player.PlayerData or not Player.PlayerData.job then return false end
+    if Player.PlayerData.job.name ~= Config.GrowShop.JobName then return false end
+    local grade = Player.PlayerData.job.grade or {}
+    local gradeName = string.lower(tostring(grade.name or ""))
+    local gradeLevel = tostring(grade.level or "")
+
+    for _, rank in pairs(Config.GrowShop.ManagementRanks or {}) do
+        if gradeName == string.lower(tostring(rank)) or gradeLevel == tostring(rank) then
+            return true
+        end
+    end
+    return false
+end
+
 -- ==========================================
 -- FUNDS MANAGEMENT
 -- ==========================================
@@ -40,15 +55,7 @@ RegisterNetEvent('JGR_IlegalSystem:Server:ManageFunds', function(action, amount)
 
     if Player.PlayerData.job.name ~= Config.GrowShop.JobName then return end
 
-    local isManager = false
-    for _, rank in pairs(Config.GrowShop.ManagementRanks) do
-        if string.lower(Player.PlayerData.job.grade.name) == string.lower(rank) or tostring(Player.PlayerData.job.grade.level) == rank then
-            isManager = true
-            break
-        end
-    end
-
-    if not isManager then
+    if not IsGrowshopManager(Player) then
         TriggerClientEvent('QBCore:Notify', src, "No tienes permisos de gestión.", "error")
         return
     end
@@ -81,8 +88,8 @@ end)
 -- EMPLOYEES MANAGEMENT
 -- ==========================================
 
-RegisterNetEvent('JGR_IlegalSystem:Server:GetEmployees', function()
-    local src = source
+RegisterNetEvent('JGR_IlegalSystem:Server:GetEmployees', function(requester)
+    local src = tonumber(requester) or source
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
 
@@ -118,6 +125,10 @@ RegisterNetEvent('JGR_IlegalSystem:Server:FireEmployee', function(targetCitizenI
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
+    if not IsGrowshopManager(Player) then
+        TriggerClientEvent('QBCore:Notify', src, "No tienes permisos de gestión.", "error")
+        return
+    end
     
     local Target = QBCore.Functions.GetPlayerByCitizenId(targetCitizenId)
     if Target then
@@ -144,13 +155,17 @@ RegisterNetEvent('JGR_IlegalSystem:Server:FireEmployee', function(targetCitizenI
     end
 
     -- Refresh lists
-    TriggerEvent('JGR_IlegalSystem:Server:GetEmployees')
+    TriggerEvent('JGR_IlegalSystem:Server:GetEmployees', src)
 end)
 
 RegisterNetEvent('JGR_IlegalSystem:Server:PromoteEmployee', function(targetCitizenId)
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
+    if not IsGrowshopManager(Player) then
+        TriggerClientEvent('QBCore:Notify', src, "No tienes permisos de gestión.", "error")
+        return
+    end
     
     -- Very basic promote logic (you can expand this to read max grades from jobs.lua or open a sub-UI)
     TriggerClientEvent('QBCore:Notify', src, "Funcionalidad de promoción en desarrollo.", "primary")
@@ -158,6 +173,12 @@ end)
 
 RegisterNetEvent('JGR_IlegalSystem:Server:HireEmployee', function(targetServerId)
     local src = source
+    local Player = QBCore.Functions.GetPlayer(src)
+    if not Player then return end
+    if not IsGrowshopManager(Player) then
+        TriggerClientEvent('QBCore:Notify', src, "No tienes permisos de gestión.", "error")
+        return
+    end
     local Target = QBCore.Functions.GetPlayer(targetServerId)
     if not Target then 
         TriggerClientEvent('QBCore:Notify', src, "Jugador no encontrado.", "error")
@@ -168,5 +189,5 @@ RegisterNetEvent('JGR_IlegalSystem:Server:HireEmployee', function(targetServerId
     TriggerClientEvent('QBCore:Notify', src, "Has contratado a " .. Target.PlayerData.name, "success")
     TriggerClientEvent('QBCore:Notify', Target.PlayerData.source, "Has sido contratado en el Grow Shop.", "success")
 
-    TriggerEvent('JGR_IlegalSystem:Server:GetEmployees')
+    TriggerEvent('JGR_IlegalSystem:Server:GetEmployees', src)
 end)

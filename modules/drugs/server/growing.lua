@@ -116,6 +116,13 @@ RegisterNetEvent('JGR_Drugs:Server:PlantSeed', function(seedType, coords)
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
 
+    if type(seedType) ~= "string" then return end
+    if type(coords) ~= "table" then return end
+    local x = tonumber(coords.x)
+    local y = tonumber(coords.y)
+    local z = tonumber(coords.z)
+    if not x or not y or not z then return end
+
     local seedCfg = Config.Growing.Seeds[seedType]
     if not seedCfg then return end
 
@@ -137,7 +144,7 @@ RegisterNetEvent('JGR_Drugs:Server:PlantSeed', function(seedType, coords)
     Player.Functions.RemoveItem(seedType, 1)
 
     local citizenid = Player.PlayerData.citizenid
-    local coordsJson = json.encode({ x = coords.x, y = coords.y, z = coords.z })
+    local coordsJson = json.encode({ x = x, y = y, z = z })
 
     -- Water starts at 0 — player needs to water the plant!
     MySQL.insert('INSERT INTO jgr_plants (owner, seed_type, coords, water) VALUES (?, ?, ?, 0)',
@@ -153,7 +160,7 @@ RegisterNetEvent('JGR_Drugs:Server:PlantSeed', function(seedType, coords)
                     id = id,
                     owner = citizenid,
                     seed_type = seedType,
-                    coords = { x = coords.x, y = coords.y, z = coords.z },
+                    coords = { x = x, y = y, z = z },
                     stage = 1,
                     water = 0,
                     _elapsed = initialElapsed,
@@ -173,6 +180,8 @@ RegisterNetEvent('JGR_Drugs:Server:WaterPlant', function(plantId)
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
 
+    plantId = tonumber(plantId)
+    if not plantId then return end
     local plant = Plants[plantId]
     if not plant then return end
 
@@ -197,6 +206,8 @@ RegisterNetEvent('JGR_Drugs:Server:HarvestPlant', function(plantId)
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
 
+    plantId = tonumber(plantId)
+    if not plantId then return end
     local plant = Plants[plantId]
     if not plant then return end
 

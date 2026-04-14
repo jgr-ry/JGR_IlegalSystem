@@ -37,8 +37,24 @@ RegisterNetEvent('JGR_IlegalSystem:Server:FinishRolling', function(reqItem, rewa
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
-    
-    paperReq = paperReq or 1
+
+    reqItem = tostring(reqItem or "")
+    rewardItem = tostring(rewardItem or "")
+    paperReq = tonumber(paperReq) or 1
+    if paperReq < 1 then return end
+
+    -- Server-side whitelist: never trust item names sent by client.
+    local isAllowed = false
+    for _, cfg in ipairs((Config.Processing and Config.Processing.Joints) or {}) do
+        if cfg.bud == reqItem and cfg.result == rewardItem and tonumber(cfg.paper_amt or 1) == paperReq then
+            isAllowed = true
+            break
+        end
+    end
+    if not isAllowed then
+        TriggerClientEvent('QBCore:Notify', src, "Receta inválida.", "error")
+        return
+    end
 
     local hasBud = Player.Functions.GetItemByName(reqItem)
     local hasPaper = Player.Functions.GetItemByName("rolling_paper")
