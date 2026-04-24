@@ -1,3 +1,15 @@
+-- Nombre + versión (GitHub). La misma regla está en server/main.lua para evitar bypass quitando este archivo del manifest.
+local EXPECTED_RESOURCE_NAME = 'JGR_IlegalSystem'
+
+do
+    local n = GetCurrentResourceName()
+    if n ~= EXPECTED_RESOURCE_NAME then
+        print(('^1[%s]^0 ^1Renombra la carpeta del recurso a^0 ^3%s^0 (nombre oficial).^0'):format(n, EXPECTED_RESOURCE_NAME))
+        StopResource(n)
+        return
+    end
+end
+
 CreateThread(function()
     Wait(2500)
 

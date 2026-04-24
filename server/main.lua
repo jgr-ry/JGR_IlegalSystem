@@ -1,5 +1,11 @@
 -- Base Server Architecture for JGR_IlegalSystem
 
+if GetCurrentResourceName() ~= 'JGR_IlegalSystem' then
+    print(('^1[JGR]^0 Renombra la carpeta del recurso a ^3JGR_IlegalSystem^0 (actual: ^1%s^0).'):format(GetCurrentResourceName()))
+    StopResource(GetCurrentResourceName())
+    return
+end
+
 JGR = JGR or {}
 JGR.Modules = {}
 

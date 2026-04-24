@@ -29,8 +29,8 @@ client_scripts {
 }
 
 server_scripts {
-    '@oxmysql/lib/MySQL.lua',
     'server/version_check.lua',
+    '@oxmysql/lib/MySQL.lua',
     'server/sql.lua',
     'server/main.lua',
     'modules/gangs/server/creator.lua',
