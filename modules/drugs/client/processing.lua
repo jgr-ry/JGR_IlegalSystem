@@ -1,20 +1,25 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Cliente: liar porros y mesa de empaquetado
+
+local RollJoint, ProcessBaggie
 
 -- ============================================================
 -- ROLLING JOINTS SYSTEM (Papel de liar)
 -- ============================================================
-RegisterNetEvent('JGR_Drugs:Client:RollJointMenu', function()
-    local PlayerData = QBCore.Functions.GetPlayerData()
-    if not PlayerData or not PlayerData.items then return end
-
-    -- Check what buds the player currently has
-    local hasBuds = {}
-    for _, item in pairs(PlayerData.items) do
-        local amt = item and (item.amount or item.count or 0) or 0
-        if amt > 0 then
-            hasBuds[item.name] = (hasBuds[item.name] or 0) + amt
+--- Cantidades (consultadas al servidor) de los items usados en una lista de recetas.
+local function countItems(recipes, keys)
+    local names, seen = {}, {}
+    for _, cfg in ipairs(recipes) do
+        for _, k in ipairs(keys) do
+            local n = cfg[k]
+            if n and not seen[n] then seen[n] = true names[#names + 1] = n end
         end
     end
+    return Bridge.GetItemCounts(names)
+end
+
+RegisterNetEvent('JGR_Drugs:Client:RollJointMenu', function()
+    -- Qué cogollos tiene el jugador
+    local hasBuds = countItems(Config.Processing.Joints, { "bud", "paper" })
 
     local options = {}
 
@@ -23,7 +28,7 @@ RegisterNetEvent('JGR_Drugs:Client:RollJointMenu', function()
         if hasBuds[jointCfg.bud] and hasBuds[jointCfg.bud] >= 1 then
             options[#options + 1] = {
                 title = "Liar " .. jointCfg.label,
-                description = "Requiere: 1x " .. QBCore.Shared.Items[jointCfg.bud].label .. " y " .. jointCfg.paper_amt .. "x " .. QBCore.Shared.Items[jointCfg.paper].label,
+                description = "Requiere: 1x " .. Bridge.GetItemLabel(jointCfg.bud) .. " y " .. jointCfg.paper_amt .. "x " .. Bridge.GetItemLabel(jointCfg.paper),
                 icon = 'cannabis',
                 onSelect = function()
                     RollJoint(i, jointCfg)
@@ -33,7 +38,7 @@ RegisterNetEvent('JGR_Drugs:Client:RollJointMenu', function()
     end
 
     if #options == 0 then
-        QBCore.Functions.Notify("No tienes cogollos para liar.", "error")
+        Bridge.Notify(PlayerId(), "No tienes cogollos para liar.", "error")
         return
     end
 
@@ -61,7 +66,7 @@ function RollJoint(index, cfg)
     }) then
         TriggerServerEvent('JGR_Drugs:Server:RollJoint', index)
     else
-        QBCore.Functions.Notify("Cancelado.", "error")
+        Bridge.Notify(PlayerId(), "Cancelado.", "error")
     end
 end
 
@@ -70,47 +75,24 @@ end
 -- ============================================================
 
 CreateThread(function()
-    if Config.Framework ~= "qbcore" then return end
-
-    -- Setup targeting for processing location
-    exports['qb-target']:AddBoxZone("jgr_drug_processing_table", Config.Processing.BaggieLocation.xyz, 1.5, 1.5, {
-        name = "jgr_drug_processing_table",
-        heading = Config.Processing.BaggieLocation.w,
-        debugPoly = false,
-        minZ = Config.Processing.BaggieLocation.z - 1.0,
-        maxZ = Config.Processing.BaggieLocation.z + 1.0,
-    }, {
-        options = {
-            {
-                type = "client",
-                event = "JGR_Drugs:Client:BaggingMenu",
-                icon = "fas fa-box",
-                label = "Procesar Cogollos",
-            },
+    Wait(1000)
+    -- Zona de la mesa de procesado (ox_target, qb-target o tecla E)
+    Bridge.AddBoxZone("jgr_drug_processing_table", Config.Processing.BaggieLocation.xyz, 1.5, Config.Processing.BaggieLocation.w, {
+        {
+            label = "Procesar Cogollos",
+            icon = "fas fa-box",
+            onSelect = function() TriggerEvent("JGR_Drugs:Client:BaggingMenu") end,
         },
-        distance = Config.Processing.BaggieTargetDistance
-    })
+    }, Config.Processing.BaggieTargetDistance)
 end)
 
-RegisterNetEvent('JGR_Drugs:Client:BaggingMenu', function()
-    local PlayerData = QBCore.Functions.GetPlayerData()
-    if not PlayerData or not PlayerData.items then return end
-
-    -- Check what buds the player currently has
-    local hasBuds = {}
-    local hasBaggies = 0
-    for _, item in pairs(PlayerData.items) do
-        local amt = item and (item.amount or item.count or 0) or 0
-        if amt > 0 then
-            hasBuds[item.name] = (hasBuds[item.name] or 0) + amt
-            if item.name == "empty_baggies" then
-                hasBaggies = hasBaggies + amt
-            end
-        end
-    end
+-- Solo lo dispara la zona de este mismo recurso (evento local, no de red)
+AddEventHandler('JGR_Drugs:Client:BaggingMenu', function()
+    local hasBuds = countItems(Config.Processing.Baggies, { "bud", "baggie" })
+    local hasBaggies = hasBuds["empty_baggies"] or 0
 
     if hasBaggies < 1 then
-        QBCore.Functions.Notify("Necesitas bolsitas vacías (empty_baggies).", "error")
+        Bridge.Notify(PlayerId(), "Necesitas bolsitas vacías (empty_baggies).", "error")
         return
     end
 
@@ -121,7 +103,7 @@ RegisterNetEvent('JGR_Drugs:Client:BaggingMenu', function()
         if hasBuds[bagCfg.bud] and hasBuds[bagCfg.bud] >= bagCfg.bud_amt then
             options[#options + 1] = {
                 title = "Empaquetar " .. bagCfg.label,
-                description = "Requiere: " .. bagCfg.bud_amt .. "x " .. QBCore.Shared.Items[bagCfg.bud].label .. " y 1x Bolsita Vacía",
+                description = "Requiere: " .. bagCfg.bud_amt .. "x " .. Bridge.GetItemLabel(bagCfg.bud) .. " y 1x Bolsita Vacía",
                 icon = 'box-open',
                 onSelect = function()
                     ProcessBaggie(i, bagCfg)
@@ -131,7 +113,7 @@ RegisterNetEvent('JGR_Drugs:Client:BaggingMenu', function()
     end
 
     if #options == 0 then
-        QBCore.Functions.Notify("No tienes cogollos suficientes para procesar.", "error")
+        Bridge.Notify(PlayerId(), "No tienes cogollos suficientes para procesar.", "error")
         return
     end
 
@@ -159,6 +141,6 @@ function ProcessBaggie(index, cfg)
     }) then
         TriggerServerEvent('JGR_Drugs:Server:ProcessBaggie', index)
     else
-        QBCore.Functions.Notify("Cancelado.", "error")
+        Bridge.Notify(PlayerId(), "Cancelado.", "error")
     end
 end

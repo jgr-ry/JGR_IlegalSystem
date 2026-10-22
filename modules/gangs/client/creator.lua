@@ -1,35 +1,21 @@
--- Client logic for Gang Creation
+-- Cliente: asistente de creación de bandas (/creategang)
 
 local currentCreator = nil
 local creationData = {}
+local OpenCreatorUI
 
 JGR.RegisterModule("gang_creator_client", function()
     
     -- Command to open the UI
     RegisterCommand('creategang', function()
-        -- Normally we would check the server first for a token, but for now we assume they have it 
-        -- or we will implement a ServerCallback to verify token.
-        
-        if Config.Framework == "qbcore" then
-            Bridge.Core.Functions.TriggerCallback('JGR_IlegalSystem:server:CheckToken', function(hasToken)
-                if hasToken then
-                    OpenCreatorUI()
-                else
-                    Bridge.Notify(PlayerId(), _L('no_permission'), "error")
-                end
-            end)
-        elseif Config.Framework == "esx" then
-            Bridge.Core.TriggerServerCallback('JGR_IlegalSystem:server:CheckToken', function(hasToken)
-                if hasToken then
-                    OpenCreatorUI()
-                else
-                    Bridge.Notify(PlayerId(), _L('no_permission'), "error")
-                end
-            end)
-        else
-            -- Standalone mock
-            OpenCreatorUI()
-        end
+        -- El servidor comprueba que tengas permiso (/givegang)
+        lib.callback('JGR_IlegalSystem:server:CheckToken', false, function(hasToken)
+            if hasToken then
+                OpenCreatorUI()
+            else
+                Bridge.Notify(PlayerId(), _L('no_permission'), "error")
+            end
+        end)
     end, false)
 
     -- Event returning from GhostPed placement

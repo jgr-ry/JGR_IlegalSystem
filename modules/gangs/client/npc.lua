@@ -1,5 +1,7 @@
 local ActiveNPCs = {}
 local LocalPlayerGang = nil
+local FetchMyGang, FetchAndSpawnAllNPCs, ProcessSpawns
+local TEXT_OWNER = "gang_npc"
 
 local function trimGangName(s)
     if s == nil then return nil end
@@ -8,15 +10,9 @@ local function trimGangName(s)
 end
 
 function FetchMyGang()
-    if Config.Framework == "qbcore" then
-        Bridge.Core.Functions.TriggerCallback('JGR_IlegalSystem:server:GetMyGang', function(gang)
-            LocalPlayerGang = trimGangName(gang)
-        end)
-    elseif Config.Framework == "esx" then
-        Bridge.Core.TriggerServerCallback('JGR_IlegalSystem:server:GetMyGang', function(gang)
-            LocalPlayerGang = trimGangName(gang)
-        end)
-    end
+    lib.callback('JGR_IlegalSystem:server:GetMyGang', false, function(gang)
+        LocalPlayerGang = trimGangName(gang)
+    end)
 end
 
 JGR.RegisterModule("gang_npc_spawner", function()
@@ -27,17 +23,10 @@ JGR.RegisterModule("gang_npc_spawner", function()
         FetchAndSpawnAllNPCs()
     end)
 
-    if Config.Framework == "qbcore" then
-        RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
-            FetchMyGang()
-            FetchAndSpawnAllNPCs()
-        end)
-    elseif Config.Framework == "esx" then
-        RegisterNetEvent('esx:playerLoaded', function()
-            FetchMyGang()
-            FetchAndSpawnAllNPCs()
-        end)
-    end
+    Bridge.OnPlayerLoaded(function()
+        FetchMyGang()
+        FetchAndSpawnAllNPCs()
+    end)
 
     -- Refresh event from server (When a new gang is created or ranks update)
     RegisterNetEvent('JGR_IlegalSystem:client:RefreshNPCs')
@@ -50,7 +39,6 @@ JGR.RegisterModule("gang_npc_spawner", function()
     end)
 
     -- Hilo de interacción aquí: menu.lua ya cargó y los módulos se inicializaron (OpenGangMenu disponible).
-    local isTextUIShown = false
     Citizen.CreateThread(function()
         Citizen.Wait(800)
         while true do
@@ -78,10 +66,7 @@ JGR.RegisterModule("gang_npc_spawner", function()
 
                 if closestNPC then
                     sleep = 0
-                    if not isTextUIShown then
-                        lib.showTextUI(_L('interact_npc', closestNPC.npc_name))
-                        isTextUIShown = true
-                    end
+                    Bridge.ShowText(TEXT_OWNER, _L('interact_npc', closestNPC.npc_name))
 
                     local ePressed = IsControlJustPressed(0, 38) or IsDisabledControlJustPressed(0, 38)
                     if ePressed then
@@ -96,16 +81,10 @@ JGR.RegisterModule("gang_npc_spawner", function()
                         end
                     end
                 else
-                    if isTextUIShown then
-                        lib.hideTextUI()
-                        isTextUIShown = false
-                    end
+                    Bridge.HideText(TEXT_OWNER)
                 end
             else
-                if isTextUIShown then
-                    lib.hideTextUI()
-                    isTextUIShown = false
-                end
+                Bridge.HideText(TEXT_OWNER)
             end
 
             Citizen.Wait(sleep)
@@ -114,16 +93,9 @@ JGR.RegisterModule("gang_npc_spawner", function()
 end)
 
 function FetchAndSpawnAllNPCs()
-    -- Only framework specific callback since QBCore/ESX structure diverges slightly
-    if Config.Framework == "qbcore" then
-        Bridge.Core.Functions.TriggerCallback('JGR_IlegalSystem:server:GetAllGangs', function(gangs)
-            ProcessSpawns(gangs)
-        end)
-    elseif Config.Framework == "esx" then
-        Bridge.Core.TriggerServerCallback('JGR_IlegalSystem:server:GetAllGangs', function(gangs)
-            ProcessSpawns(gangs)
-        end)
-    end
+    lib.callback('JGR_IlegalSystem:server:GetAllGangs', false, function(gangs)
+        ProcessSpawns(gangs)
+    end)
 end
 
 function ProcessSpawns(gangs)
@@ -138,19 +110,15 @@ function ProcessSpawns(gangs)
     if not gangs then return end
     
     for _, gang in ipairs(gangs) do
-        local coordsStr = table.concat({gang.coords})
-        -- Parse the JSON coords safely
+        -- Coordenadas en JSON: { x, y, z, h }
         local success, coordsNode = pcall(json.decode, gang.coords)
-        
-        if success and coordsNode then
+
+        if success and type(coordsNode) == "table" and coordsNode.x and coordsNode.y and coordsNode.z then
             local model = GetHashKey(gang.npc_model)
-            if IsModelValid(model) then
-                RequestModel(model)
-                while not HasModelLoaded(model) do Citizen.Wait(10) end
-                
-                -- Spawn Target Ped
-                local ped = CreatePed(4, model, coordsNode.x, coordsNode.y, coordsNode.z, coordsNode.h, false, false)
-                
+            if IsModelValid(model) and pcall(lib.requestModel, model, 10000) then
+                local ped = CreatePed(4, model, coordsNode.x, coordsNode.y, coordsNode.z, coordsNode.h or 0.0, false, false)
+                SetModelAsNoLongerNeeded(model)
+
                 SetEntityInvincible(ped, true)
                 SetBlockingOfNonTemporaryEvents(ped, true)
                 FreezeEntityPosition(ped, true)
@@ -167,3 +135,10 @@ function ProcessSpawns(gangs)
         end
     end
 end
+
+AddEventHandler('onResourceStop', function(res)
+    if res ~= GetCurrentResourceName() then return end
+    for _, npcObj in pairs(ActiveNPCs) do
+        if npcObj.handle and DoesEntityExist(npcObj.handle) then DeleteEntity(npcObj.handle) end
+    end
+end)

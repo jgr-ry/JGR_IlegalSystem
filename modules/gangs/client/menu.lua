@@ -1,19 +1,17 @@
 JGR.RegisterModule("gang_menu_client", function()
     local CurrentGangData = nil
     local NearPoint = nil
+    -- Declaradas aquí para que sean locales al módulo (antes eran globales).
+    local RefreshGangPoints, HandlePointInteraction, RotationToDirection
 
-    local function qbDrawPointHint(text)
-        if Config.Framework ~= "qbcore" then return end
-        pcall(function()
-            exports["qb-core"]:DrawText(text)
-        end)
+    local HINT_OWNER = "gang_points"
+
+    local function drawPointHint(text)
+        Bridge.ShowText(HINT_OWNER, text)
     end
 
-    local function qbClearPointHint()
-        if Config.Framework ~= "qbcore" then return end
-        pcall(function()
-            exports["qb-core"]:HideText()
-        end)
+    local function clearPointHint()
+        Bridge.HideText(HINT_OWNER)
     end
 
     local function showPlacementNui(title, subtitle)
@@ -29,77 +27,41 @@ JGR.RegisterModule("gang_menu_client", function()
     end
 
     -- Triggers NUI to open the Dashboard
-    function OpenGangMenu(gangName)
-        if Config.Framework == "qbcore" then
-            Bridge.Core.Functions.TriggerCallback('JGR_IlegalSystem:server:GetGangMenuData', function(data)
-                if data then
-                    CurrentGangData = data.gang
-                    SetNuiFocus(true, true)
-                    SendNUIMessage({
-                        action = "open_gang_menu",
-                        gang = data.gang,
-                        permissions = data.permissions,
-                        translations = data.translations
-                    })
-                else
-                    Bridge.Notify(PlayerId(), _L('gang_menu_no_data'), "error")
-                end
-            end, gangName)
-        elseif Config.Framework == "esx" then
-            Bridge.Core.TriggerServerCallback('JGR_IlegalSystem:server:GetGangMenuData', function(data)
-                if data then
-                    CurrentGangData = data.gang
-                    SetNuiFocus(true, true)
-                    SendNUIMessage({
-                        action = "open_gang_menu",
-                        gang = data.gang,
-                        permissions = data.permissions,
-                        translations = data.translations
-                    })
-                else
-                    Bridge.Notify(PlayerId(), _L('gang_menu_no_data'), "error")
-                end
-            end, gangName)
-        end
+    local function OpenGangMenu(gangName)
+        lib.callback('JGR_IlegalSystem:server:GetGangMenuData', false, function(data)
+            if data then
+                CurrentGangData = data.gang
+                SetNuiFocus(true, true)
+                SendNUIMessage({
+                    action = "open_gang_menu",
+                    gang = data.gang,
+                    permissions = data.permissions,
+                    translations = data.translations
+                })
+            else
+                Bridge.Notify(PlayerId(), _L('gang_menu_no_data'), "error")
+            end
+        end, gangName)
     end
 
     _G.OpenGangMenu = OpenGangMenu
 
     --- Carga sede/puntos/stats sin abrir el menú (marcadores en mundo siempre que tengas banda).
     local function SyncGangWorldDataFromServer()
-        if Config.Framework == "qbcore" then
-            Bridge.Core.Functions.TriggerCallback("JGR_IlegalSystem:server:GetMyGang", function(gangName)
-                if type(gangName) == "string" then
-                    gangName = gangName:match("^%s*(.-)%s*$")
+        lib.callback("JGR_IlegalSystem:server:GetMyGang", false, function(gangName)
+            if type(gangName) == "string" then
+                gangName = gangName:match("^%s*(.-)%s*$")
+            end
+            if not gangName or gangName == "" then
+                CurrentGangData = nil
+                return
+            end
+            lib.callback("JGR_IlegalSystem:server:GetGangMenuData", false, function(data)
+                if data and data.gang then
+                    CurrentGangData = data.gang
                 end
-                if not gangName or gangName == "" then
-                    CurrentGangData = nil
-                    return
-                end
-                Bridge.Core.Functions.TriggerCallback("JGR_IlegalSystem:server:GetGangMenuData", function(data)
-                    if data and data.gang then
-                        CurrentGangData = data.gang
-                    end
-                end, gangName)
-            end)
-        elseif Config.Framework == "esx" then
-            Bridge.Core.TriggerServerCallback("JGR_IlegalSystem:server:GetMyGang", function(gangName)
-                if type(gangName) == "string" then
-                    gangName = gangName:match("^%s*(.-)%s*$")
-                end
-                if not gangName or gangName == "" then
-                    CurrentGangData = nil
-                    return
-                end
-                Bridge.Core.TriggerServerCallback("JGR_IlegalSystem:server:GetGangMenuData", function(data)
-                    if data and data.gang then
-                        CurrentGangData = data.gang
-                    end
-                end, gangName)
-            end)
-        else
-            CurrentGangData = nil
-        end
+            end, gangName)
+        end)
     end
 
     _G.JGR_SyncGangWorldData = SyncGangWorldDataFromServer
@@ -275,15 +237,9 @@ JGR.RegisterModule("gang_menu_client", function()
             SyncGangWorldDataFromServer()
             return
         end
-        if Config.Framework == "qbcore" then
-            Bridge.Core.Functions.TriggerCallback('JGR_IlegalSystem:server:GetGangMenuData', function(data)
-                if data then CurrentGangData = data.gang end
-            end, gn)
-        elseif Config.Framework == "esx" then
-            Bridge.Core.TriggerServerCallback('JGR_IlegalSystem:server:GetGangMenuData', function(data)
-                if data then CurrentGangData = data.gang end
-            end, gn)
-        end
+        lib.callback('JGR_IlegalSystem:server:GetGangMenuData', false, function(data)
+            CurrentGangData = data and data.gang or nil
+        end, gn)
     end
 
     -- Puntos en mundo: sincronizar al entrar (sin tener que abrir el menú del NPC antes).
@@ -292,15 +248,9 @@ JGR.RegisterModule("gang_menu_client", function()
         SyncGangWorldDataFromServer()
     end)
 
-    if Config.Framework == "qbcore" then
-        RegisterNetEvent("QBCore:Client:OnPlayerLoaded", function()
-            Citizen.SetTimeout(2000, SyncGangWorldDataFromServer)
-        end)
-    elseif Config.Framework == "esx" then
-        RegisterNetEvent("esx:playerLoaded", function()
-            Citizen.SetTimeout(2000, SyncGangWorldDataFromServer)
-        end)
-    end
+    Bridge.OnPlayerLoaded(function()
+        Citizen.SetTimeout(2000, SyncGangWorldDataFromServer)
+    end)
 
     -- RefreshNPCs también dispara Sync (ver npc.lua: tras respawn de NPCs).
 
@@ -316,7 +266,8 @@ JGR.RegisterModule("gang_menu_client", function()
                 local bestDist = 9999.0
 
                 for pType, pCoords in pairs(CurrentGangData.stats.points) do
-                    local dist = #(coords - vector3(pCoords.x, pCoords.y, pCoords.z))
+                    local valid = type(pCoords) == "table" and pCoords.x and pCoords.y and pCoords.z
+                    local dist = valid and #(coords - vector3(pCoords.x, pCoords.y, pCoords.z)) or 9999.0
                     if dist < 12.0 then
                         sleep = 0
                         local mz = pCoords.z + 1.05
@@ -355,15 +306,15 @@ JGR.RegisterModule("gang_menu_client", function()
                             label = "Entra en un vehículo para guardarlo"
                         end
                     end
-                    qbDrawPointHint("[E] " .. label)
+                    drawPointHint("[E] " .. label)
                     if IsControlJustReleased(0, 38) then
                         HandlePointInteraction(pType)
                     end
                 else
-                    qbClearPointHint()
+                    clearPointHint()
                 end
             else
-                qbClearPointHint()
+                clearPointHint()
             end
             Citizen.Wait(sleep)
         end
@@ -373,17 +324,8 @@ JGR.RegisterModule("gang_menu_client", function()
         if type == "boss" then
             OpenGangMenu(CurrentGangData.name)
         elseif type == "stash" then
-            if Config.GangInventory == "ox_inventory" and GetResourceState("ox_inventory") == "started" then
-                TriggerServerEvent("JGR_IlegalSystem:server:RequestOpenGangStash")
-            elseif Config.Framework == "qbcore" and Config.GangInventory ~= "ox_inventory" then
-                TriggerServerEvent("inventory:server:OpenInventory", "stash", "gangstash_" .. CurrentGangData.name, {
-                    maxweight = 1000000,
-                    slots = 100,
-                })
-                TriggerEvent("inventory:client:SetCurrentStash", "gangstash_" .. CurrentGangData.name)
-            else
-                Bridge.Notify(PlayerId(), "Almacén no configurado para este servidor.", "error")
-            end
+            -- El servidor valida banda y distancia y abre el inventario adecuado (ox_inventory, qb-inventory…)
+            TriggerServerEvent("JGR_IlegalSystem:server:RequestOpenGangStash")
         elseif type == "garage_menu" or type == "garage" then
             local mode = Config.GangGarageMenuMode or "ox_lib"
             if mode == "nui" then
@@ -463,10 +405,7 @@ JGR.RegisterModule("gang_menu_client", function()
         cb('ok')
     end)
 
-    RegisterNUICallback('closeUI', function(data, cb)
-        SetNuiFocus(false, false)
-        cb('ok')
-    end)
+    -- 'closeUI' se registra en creator.lua (registrarlo dos veces respondía dos veces al mismo fetch).
 
     RegisterNUICallback('closeGangMenu', function(data, cb)
         SetNuiFocus(false, false)
@@ -650,35 +589,16 @@ JGR.RegisterModule("gang_menu_client", function()
             SyncGangWorldDataFromServer()
             return
         end
-        if Config.Framework == "qbcore" then
-            Bridge.Core.Functions.TriggerCallback('JGR_IlegalSystem:server:GetGangMenuData', function(data)
-                if not data or not data.gang then return end
-                CurrentGangData = data.gang
-                SendNUIMessage({
-                    action = 'gang_menu_sync',
-                    gang = data.gang,
-                    permissions = data.permissions,
-                    translations = data.translations,
-                })
-            end, gn)
-        elseif Config.Framework == "esx" then
-            Bridge.Core.TriggerServerCallback('JGR_IlegalSystem:server:GetGangMenuData', function(data)
-                if not data or not data.gang then return end
-                CurrentGangData = data.gang
-                SendNUIMessage({
-                    action = 'gang_menu_sync',
-                    gang = data.gang,
-                    permissions = data.permissions,
-                    translations = data.translations,
-                })
-            end, gn)
-        end
-    end)
-
-    RegisterNetEvent('JGR_IlegalSystem:client:OpenOxGangStash', function(gangName)
-        if not gangName or GetResourceState("ox_inventory") ~= "started" then return end
-        local stashId = "jgr_gang_" .. tostring(gangName):gsub("%s+", "_")
-        exports.ox_inventory:openInventory("stash", stashId)
+        lib.callback('JGR_IlegalSystem:server:GetGangMenuData', false, function(data)
+            if not data or not data.gang then return end
+            CurrentGangData = data.gang
+            SendNUIMessage({
+                action = 'gang_menu_sync',
+                gang = data.gang,
+                permissions = data.permissions,
+                translations = data.translations,
+            })
+        end, gn)
     end)
 
     RegisterNetEvent('JGR_IlegalSystem:client:DeleteGarageVehicleEntity', function()
@@ -688,7 +608,7 @@ JGR.RegisterModule("gang_menu_client", function()
             if veh and veh ~= 0 then
                 TaskLeaveVehicle(ped, veh, 0)
                 Citizen.Wait(400)
-                if DoesEntityExist(veh) then
+                if DoesEntityExist(veh) and NetworkHasControlOfEntity(veh) then
                     DeleteEntity(veh)
                 end
             end
@@ -705,21 +625,16 @@ JGR.RegisterModule("gang_menu_client", function()
             Bridge.Notify(PlayerId(), "Modelo de vehículo no válido.", "error")
             return
         end
-        lib.requestModel(model, 10000)
-        local h = spawn.h or 0.0
-        local veh = CreateVehicle(model, spawn.x + 0.0, spawn.y + 0.0, spawn.z + 0.0, h + 0.0, true, false)
-        if not veh or veh == 0 then
+        local veh = Bridge.SpawnVehicle(model, spawn, spawn.h or 0.0)
+        if not veh then
             Bridge.Notify(PlayerId(), "No se pudo crear el vehículo.", "error")
             return
         end
-        SetEntityAsMissionEntity(veh, true, true)
-        SetVehicleOnGroundProperly(veh)
         if lib.setVehicleProperties then
             lib.setVehicleProperties(veh, props)
         end
-        local ped = PlayerPedId()
-        TaskWarpPedIntoVehicle(ped, veh, -1)
-        SetModelAsNoLongerNeeded(model)
+        if props.plate then Bridge.GiveKeys(veh, props.plate) end
+        TaskWarpPedIntoVehicle(PlayerPedId(), veh, -1)
     end)
 
     RegisterNUICallback('closeGangGarageStandalone', function(_, cb)

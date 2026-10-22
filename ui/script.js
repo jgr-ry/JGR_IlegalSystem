@@ -7,6 +7,11 @@ let selectedSpecialization = null;
 const doc = document;
 const app = doc.getElementById('app');
 
+/** Escapa texto antes de meterlo en innerHTML (nombres, rangos y títulos los escriben los jugadores). */
+function esc(value) {
+    return String(value ?? '').replace(/[&<>"'`]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c]));
+}
+
 /**
  * NUI → cliente Lua. FiveM expone GetParentResourceName como global (no siempre en window).
  * Había una segunda función `post` más abajo que sobrescribía esta y usaba window.GetParentResourceName → undefined → ningún botón funcionaba.
@@ -357,7 +362,7 @@ function openGangGarageStandaloneUI(vehicles) {
         const model = (v && v.model != null) ? String(v.model) : '—';
         const li = doc.createElement('li');
         const left = doc.createElement('div');
-        left.innerHTML = `<strong>${plate}</strong><div class="jgr-gv-meta">Modelo: ${model}</div>`;
+        left.innerHTML = `<strong>${esc(plate)}</strong><div class="jgr-gv-meta">Modelo: ${esc(model)}</div>`;
         const btn = doc.createElement('button');
         btn.type = 'button';
         btn.className = 'btn btn-primary gm-btn-accent';
@@ -689,8 +694,8 @@ function buildAdminTable(gangs) {
         tr.innerHTML = `
             <td>
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <div class="color-dot" style="background-color: ${gang.color}"></div>
-                    <strong>${gang.name}</strong>
+                    <div class="color-dot" style="background-color: ${esc(gang.color)}"></div>
+                    <strong>${esc(gang.name)}</strong>
                 </div>
             </td>
             <td id="td_members_${gang.name}">
@@ -1031,10 +1036,10 @@ function populateGangMenu(gang, perms, translationsData, syncOpts) {
                 <div class="gm-member-row">
                     <div class="gm-member-avatar"><i class="fa-regular fa-user"></i></div>
                     <div class="gm-member-details">
-                        <span class="gm-member-name">${m.name || m.citizenid}</span>
+                        <span class="gm-member-name">${esc(m.name || m.citizenid)}</span>
                         <div style="display:flex; gap: 10px; align-items:center; margin-top: 5px;">
-                            <span class="badge gm-badge-blue">${m.rank}</span>
-                            <span style="color: var(--text-muted); font-size: 0.8rem;"><i class="fa-solid fa-phone" style="font-size: 0.75rem; color: var(--gang-color, #a855f7);"></i> ${m.phone || 'N/A'}</span>
+                            <span class="badge gm-badge-blue">${esc(m.rank)}</span>
+                            <span style="color: var(--text-muted); font-size: 0.8rem;"><i class="fa-solid fa-phone" style="font-size: 0.75rem; color: var(--gang-color, #a855f7);"></i> ${esc(m.phone || 'N/A')}</span>
                         </div>
                     </div>
                 </div>
@@ -1435,8 +1440,8 @@ function renderDocList() {
         el.innerHTML = `
             <i class="fa-solid fa-file-lines" style="color: var(--gang-color, #a855f7); font-size: 1.2rem;"></i>
             <div style="flex:1; overflow:hidden;">
-                <span style="color:white; font-weight:600; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${d.title}</span>
-                <span style="color:var(--text-muted); font-size:0.75rem;">${d.date || ''}</span>
+                <span style="color:white; font-weight:600; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(d.title)}</span>
+                <span style="color:var(--text-muted); font-size:0.75rem;">${esc(d.date || '')}</span>
             </div>
         `;
         el.style.cssText = 'display:flex; align-items:center; gap:12px; padding:10px 15px; background:rgba(255,255,255,0.05); border-radius:8px; cursor:pointer; border:1px solid transparent; transition:all 0.2s;';
@@ -2133,18 +2138,21 @@ function populateGrowShopEmployees(employees) {
 
         card.innerHTML = `
             <div>
-                <h4 style="color: white; margin: 0; font-size: 1.1rem;">${name}</h4>
-                <span style="color: var(--text-muted); font-size: 0.85rem;"><i class="fa-solid fa-briefcase" style="color: #3b82f6;"></i> ${emp.gradeLabel} (Nivel ${emp.gradeLevel})</span>
+                <h4 style="color: white; margin: 0; font-size: 1.1rem;">${esc(name)}</h4>
+                <span style="color: var(--text-muted); font-size: 0.85rem;"><i class="fa-solid fa-briefcase" style="color: #3b82f6;"></i> ${esc(emp.gradeLabel)} (Nivel ${esc(emp.gradeLevel)})</span>
             </div>
             <div style="display: flex; gap: 8px;">
-                <button class="btn btn-primary" title="Ascender/Manejar" style="background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; color: #3b82f6; padding: 8px;" onclick="promoteEmployee('${emp.citizenid}')">
+                <button class="btn btn-primary js-promote" title="Ascender/Manejar" style="background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; color: #3b82f6; padding: 8px;">
                     <i class="fa-solid fa-arrow-up"></i>
                 </button>
-                <button class="btn btn-danger" title="Despedir" style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #ef4444; padding: 8px;" onclick="fireEmployee('${emp.citizenid}')">
+                <button class="btn btn-danger js-fire" title="Despedir" style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #ef4444; padding: 8px;">
                     <i class="fa-solid fa-user-xmark"></i>
                 </button>
             </div>
         `;
+        // Sin onclick en línea: el identificador no se inserta en código JS
+        card.querySelector('.js-promote').addEventListener('click', () => promoteEmployee(emp.citizenid));
+        card.querySelector('.js-fire').addEventListener('click', () => fireEmployee(emp.citizenid));
         list.appendChild(card);
     });
 }

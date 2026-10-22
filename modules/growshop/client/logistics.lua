@@ -1,49 +1,56 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Cliente: logística del Grow Shop (recogidas, repartos, garaje de empresa y NPC del Cocinero)
 
-local pickupProp = nil -- Entity handle for pickup visual prop
+local pickupProp = nil -- Caja visible en el punto de recogida
+local NPC_WALK_TIMEOUT = 60000 -- ms máximos esperando a que el NPC llegue (evita bucles infinitos)
+local RunDeliveryNPC
+
+--- Espera a que el ped llegue a destino o se agote el tiempo.
+local function waitForArrival(ped, target, timeoutMs)
+    local deadline = GetGameTimer() + (timeoutMs or NPC_WALK_TIMEOUT)
+    while DoesEntityExist(ped) and #(GetEntityCoords(ped) - target) > 1.5 and GetGameTimer() < deadline do
+        Wait(500)
+    end
+end
 
 -- ============================================================
 -- LARGE ORDER: Physical Pickup Mission (>= 6 items)
 -- ============================================================
-RegisterNetEvent('JGR_IlegalSystem:Client:StartPickupMission', function(coords)
-    SetNewWaypoint(coords.x, coords.y)
-    QBCore.Functions.Notify('Pedido grande. Ve al punto del GPS con la furgoneta para recogerlo.', 'primary', 7500)
-
-    -- Spawn visible prop (stack of boxes) so the player can find the pickup spot
-    local propHash = GetHashKey("hei_prop_heist_box")
-    RequestModel(propHash)
-    while not HasModelLoaded(propHash) do Wait(10) end
-    pickupProp = CreateObject(propHash, coords.x, coords.y, coords.z - 0.5, false, false, false)
-    PlaceObjectOnGroundProperly(pickupProp)
-    FreezeEntityPosition(pickupProp, true)
-
-    exports['qb-target']:AddBoxZone("GrowShopPickup", coords, 2.5, 2.5, {
-        name = "GrowShopPickup",
-        heading = 0,
-        debugPoly = false,
-        minZ = coords.z - 1.0,
-        maxZ = coords.z + 1.5,
-    }, {
-        options = {
-            {
-                type = "server",
-                event = "JGR_IlegalSystem:Server:CompletePickup",
-                icon = "fas fa-box-open",
-                label = "Recoger y Cargar Pedido",
-                job = Config.GrowShop.JobName
-            }
-        },
-        distance = 3.0
-    })
-end)
-
-RegisterNetEvent('JGR_IlegalSystem:Client:RemovePickupTarget', function()
-    exports['qb-target']:RemoveZone("GrowShopPickup")
+local function clearPickup()
+    Bridge.RemoveZone("GrowShopPickup")
     if pickupProp and DoesEntityExist(pickupProp) then
         DeleteEntity(pickupProp)
-        pickupProp = nil
     end
+    pickupProp = nil
+end
+
+RegisterNetEvent('JGR_IlegalSystem:Client:StartPickupMission', function(coords)
+    if type(coords) ~= "vector3" and type(coords) ~= "table" then return end
+    coords = vector3(coords.x, coords.y, coords.z)
+    clearPickup()
+    SetNewWaypoint(coords.x, coords.y)
+    Bridge.Notify(PlayerId(), 'Pedido grande. Ve al punto del GPS con la furgoneta para recogerlo.', 'primary')
+
+    -- Caja visible para encontrar el punto de recogida
+    local propHash = GetHashKey("hei_prop_heist_box")
+    if pcall(lib.requestModel, propHash, 10000) then
+        pickupProp = CreateObject(propHash, coords.x, coords.y, coords.z - 0.5, false, false, false)
+        PlaceObjectOnGroundProperly(pickupProp)
+        FreezeEntityPosition(pickupProp, true)
+        SetModelAsNoLongerNeeded(propHash)
+    end
+
+    Bridge.AddBoxZone("GrowShopPickup", coords, 2.5, 0.0, {
+        {
+            label = "Recoger y Cargar Pedido",
+            icon = "fas fa-box-open",
+            onSelect = function()
+                TriggerServerEvent("JGR_IlegalSystem:Server:CompletePickup")
+            end,
+        },
+    }, 3.0)
 end)
+
+RegisterNetEvent('JGR_IlegalSystem:Client:RemovePickupTarget', clearPickup)
 
 -- ============================================================
 -- SMALL ORDER: NPC Delivery with HUD Timer (< 6 items)
@@ -73,7 +80,7 @@ RegisterNetEvent('JGR_IlegalSystem:Client:DeliveryArrived', function()
     deliveryTimeLeft = 0
     SendNUIMessage({ action = "hide_delivery_timer" })
 
-    QBCore.Functions.Notify("¡El repartidor ha llegado con tu pedido! Se ha dejado en el almacén.", "success", 7500)
+    Bridge.Notify(PlayerId(), "¡El repartidor ha llegado con tu pedido! Se ha dejado en el almacén.", "success")
 
     -- Trigger the NPC walking IN with a box
     RunDeliveryNPC()
@@ -83,8 +90,10 @@ local lastDeliveryNPC = nil
 
 function RunDeliveryNPC()
     local hash = GetHashKey('s_m_y_dealer_01')
-    RequestModel(hash)
-    while not HasModelLoaded(hash) do Wait(10) end
+    if not pcall(lib.requestModel, hash, 10000) then
+        TriggerServerEvent('JGR_IlegalSystem:Server:CompleteDelivery')
+        return
+    end
 
     -- NPC spawns 15m away from the shop and walks to the stash
     local shopLoc = Config.GrowShop.Location
@@ -105,24 +114,25 @@ function RunDeliveryNPC()
     SetEntityInvincible(ped, true)
     SetBlockingOfNonTemporaryEvents(ped, true)
 
-    local prop = CreateObject(GetHashKey("prop_paper_box_02"), 0, 0, 0, true, true, true)
+    local boxHash = GetHashKey("prop_paper_box_02")
+    pcall(lib.requestModel, boxHash, 5000)
+    local prop = CreateObject(boxHash, 0, 0, 0, false, true, true)
+    SetModelAsNoLongerNeeded(boxHash)
     AttachEntityToEntity(prop, ped, GetPedBoneIndex(ped, 28422), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, true, true, false, true, 1, true)
 
     TaskGoStraightToCoord(ped, targetCoords.x, targetCoords.y, targetCoords.z, 1.0, -1, 0.0, 0.0)
 
     CreateThread(function()
-        while #(GetEntityCoords(ped) - targetCoords) > 1.5 do
-            Wait(500)
-        end
+        waitForArrival(ped, targetCoords)
 
-        DeleteEntity(prop)
+        if DoesEntityExist(prop) then DeleteEntity(prop) end
         TaskGoStraightToCoord(ped, npcSpawn.x, npcSpawn.y, npcSpawn.z, 1.0, -1, 0.0, 0.0)
 
         Wait(8000)
-        DeleteEntity(ped)
+        if DoesEntityExist(ped) then DeleteEntity(ped) end
         lastDeliveryNPC = nil
 
-        -- Tell server to put items in stash
+        -- El servidor deja los items en el almacén (comprueba que el pedido esté listo)
         TriggerServerEvent('JGR_IlegalSystem:Server:CompleteDelivery')
     end)
 end
@@ -146,7 +156,7 @@ if Config.Debug then
 end
 
 -- ============================================================
--- COMPANY GARAGE (Persistent vehicle, small black marker, QBCore text)
+-- GARAJE DE EMPRESA (furgoneta persistente, marcador negro y texto de ayuda)
 -- ============================================================
 local companyVehicle = nil -- Entity handle of the spawned vehicle
 local savedDamage = nil   -- Stored damage state
@@ -168,6 +178,7 @@ local function ApplyVehicleDamage(veh, dmg)
 end
 
 local isNearGarage = false
+local GARAGE_TEXT = "growshop_garage"
 
 CreateThread(function()
     if not Config.GrowShop.Enabled or not Config.GrowShop.Garage then return end
@@ -185,62 +196,63 @@ CreateThread(function()
             -- Small black circle marker on the ground
             DrawMarker(25, garagePos.x, garagePos.y, garagePos.z - 0.98, 0, 0, 0, 0, 0, 0, 0.8, 0.8, 0.3, 0, 0, 0, 180, false, false, 2, nil, nil, false)
 
-            if dist < 3.0 then
-                local pData = QBCore.Functions.GetPlayerData()
-                if pData.job and pData.job.name == Config.GrowShop.JobName then
-                    if not isNearGarage then
-                        isNearGarage = true
-                        exports['qb-core']:DrawText('[E] Garaje de Empresa', 'left')
-                    end
+            if dist < 3.0 and JGR.GrowShop and JGR.GrowShop.Role then
+                if not isNearGarage then
+                    isNearGarage = true
+                    Bridge.ShowText(GARAGE_TEXT, '[E] Garaje de Empresa')
+                end
 
-                    if IsControlJustReleased(0, 38) then -- E key
-                        if IsPedInAnyVehicle(ped, false) then
-                            -- STORE vehicle
-                            local veh = GetVehiclePedIsIn(ped, false)
+                if IsControlJustReleased(0, 38) then -- Tecla E
+                    if IsPedInAnyVehicle(ped, false) then
+                        -- GUARDAR: solo la furgoneta de la empresa (antes borraba cualquier vehículo)
+                        local veh = GetVehiclePedIsIn(ped, false)
+                        local isCompany = veh == companyVehicle
+                            or (GetVehicleNumberPlateText(veh) or ""):find("^%s*GROW") ~= nil
+                        if not isCompany then
+                            Bridge.Notify(PlayerId(), "Solo puedes guardar la furgoneta de la empresa.", "error")
+                        else
                             savedDamage = SaveVehicleDamage(veh)
                             TaskLeaveVehicle(ped, veh, 0)
                             Wait(1500)
-                            DeleteVehicle(veh)
+                            if DoesEntityExist(veh) then DeleteVehicle(veh) end
                             companyVehicle = nil
-                            QBCore.Functions.Notify("Vehículo guardado en el garaje.", "success")
-                        elseif companyVehicle and DoesEntityExist(companyVehicle) then
-                            QBCore.Functions.Notify("La furgoneta ya está fuera.", "error")
-                        else
-                            -- SPAWN vehicle
-                            QBCore.Functions.SpawnVehicle(Config.GrowShop.Garage.Vehicle, function(veh)
-                                companyVehicle = veh
-                                local plate = "GROW"..tostring(math.random(1000, 9999))
-                                SetVehicleNumberPlateText(veh, plate)
-                                SetEntityHeading(veh, Config.GrowShop.Garage.Heading)
-                                SetVehicleFuelLevel(veh, 100.0)
-
-                                TriggerServerEvent('qb-vehiclekeys:server:AcquireVehicleKeys', plate)
-
-                                SetVehicleCustomPrimaryColour(veh, 16, 185, 129)
-                                SetVehicleCustomSecondaryColour(veh, 168, 85, 247)
-
-                                -- Restore damage if previously stored
-                                if savedDamage then
-                                    ApplyVehicleDamage(veh, savedDamage)
-                                end
-
-                                SetPedIntoVehicle(ped, veh, -1)
-                                QBCore.Functions.Notify("Vehículo de empresa retirado.", "success")
-                            end, garagePos, true)
+                            Bridge.Notify(PlayerId(), "Vehículo guardado en el garaje.", "success")
                         end
+                    elseif companyVehicle and DoesEntityExist(companyVehicle) then
+                        Bridge.Notify(PlayerId(), "La furgoneta ya está fuera.", "error")
+                    else
+                        -- SACAR la furgoneta
+                        Bridge.SpawnVehicle(Config.GrowShop.Garage.Vehicle, garagePos, Config.GrowShop.Garage.Heading, function(veh)
+                            if not veh then
+                                Bridge.Notify(PlayerId(), "No se pudo sacar el vehículo.", "error")
+                                return
+                            end
+                            companyVehicle = veh
+                            local plate = "GROW" .. tostring(math.random(1000, 9999))
+                            SetVehicleNumberPlateText(veh, plate)
+                            SetEntityHeading(veh, Config.GrowShop.Garage.Heading)
+                            Bridge.SetFuel(veh, 100.0)
+                            Bridge.GiveKeys(veh, plate)
+
+                            SetVehicleCustomPrimaryColour(veh, 16, 185, 129)
+                            SetVehicleCustomSecondaryColour(veh, 168, 85, 247)
+
+                            if savedDamage then
+                                ApplyVehicleDamage(veh, savedDamage)
+                            end
+
+                            SetPedIntoVehicle(ped, veh, -1)
+                            Bridge.Notify(PlayerId(), "Vehículo de empresa retirado.", "success")
+                        end)
                     end
                 end
-            else
-                if isNearGarage then
-                    isNearGarage = false
-                    exports['qb-core']:HideText()
-                end
-            end
-        else
-            if isNearGarage then
+            elseif isNearGarage then
                 isNearGarage = false
-                exports['qb-core']:HideText()
+                Bridge.HideText(GARAGE_TEXT)
             end
+        elseif isNearGarage then
+            isNearGarage = false
+            Bridge.HideText(GARAGE_TEXT)
         end
         Wait(sleep)
     end
@@ -251,8 +263,10 @@ end)
 -- ============================================================
 RegisterNetEvent('JGR_IlegalSystem:Client:RunNPCSequence', function(isDelivery)
     local hash = GetHashKey('s_m_y_dealer_01')
-    RequestModel(hash)
-    while not HasModelLoaded(hash) do Wait(10) end
+    if not pcall(lib.requestModel, hash, 10000) then
+        if isDelivery then TriggerServerEvent('JGR_IlegalSystem:Server:CookFinished') end
+        return
+    end
 
     local shopLoc = Config.GrowShop.Location
     local stashLoc = Config.GrowShop.Stash.Location
@@ -263,21 +277,22 @@ RegisterNetEvent('JGR_IlegalSystem:Client:RunNPCSequence', function(isDelivery)
     SetEntityInvincible(ped, true)
     SetBlockingOfNonTemporaryEvents(ped, true)
 
-    local prop = CreateObject(GetHashKey("prop_paper_box_02"), 0, 0, 0, true, true, true)
+    local boxHash = GetHashKey("prop_paper_box_02")
+    pcall(lib.requestModel, boxHash, 5000)
+    local prop = CreateObject(boxHash, 0, 0, 0, false, true, true)
+    SetModelAsNoLongerNeeded(boxHash)
     AttachEntityToEntity(prop, ped, GetPedBoneIndex(ped, 28422), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, true, true, false, true, 1, true)
 
     TaskGoStraightToCoord(ped, targetCoords.x, targetCoords.y, targetCoords.z, 1.0, -1, 0.0, 0.0)
 
     CreateThread(function()
-        while #(GetEntityCoords(ped) - targetCoords) > 1.5 do
-            Wait(500)
-        end
+        waitForArrival(ped, targetCoords)
 
-        DeleteEntity(prop)
+        if DoesEntityExist(prop) then DeleteEntity(prop) end
         TaskGoStraightToCoord(ped, npcSpawn.x, npcSpawn.y, npcSpawn.z, 1.0, -1, 0.0, 0.0)
 
         Wait(8000)
-        DeleteEntity(ped)
+        if DoesEntityExist(ped) then DeleteEntity(ped) end
 
         if isDelivery then
             TriggerServerEvent('JGR_IlegalSystem:Server:CookFinished')
