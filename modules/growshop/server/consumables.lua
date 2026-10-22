@@ -1,4 +1,4 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Servidor: consumibles del Grow Shop (porros, comestibles) y liado manual
 
 local Consumables = {
     ["joint_weed"]   = { health = 10, armor = 0, effect = "weed" },
@@ -10,61 +10,55 @@ local Consumables = {
     ["thc_gummies"]  = { health = 15, armor = 5, effect = "gummies" }
 }
 
-Citizen.CreateThread(function()
-    if Config.Framework == "qbcore" then
-        for itemName, data in pairs(Consumables) do
-            QBCore.Functions.CreateUseableItem(itemName, function(source, item)
-                local src = source
-                local Player = QBCore.Functions.GetPlayer(src)
-                if not Player then return end
-                
-                if Player.Functions.RemoveItem(item.name, 1, item.slot) then
-                    -- Trigger client event to play animation and screen effects
-                    TriggerClientEvent("JGR_IlegalSystem:Client:UseConsumable", src, item.name, data)
-                end
-            end)
-        end
-
-        -- Rolling Paper (Phase 3.5)
-        QBCore.Functions.CreateUseableItem("rolling_paper", function(source, item)
-            local src = source
-            TriggerClientEvent("JGR_IlegalSystem:Client:OpenRollingMenu", src)
+CreateThread(function()
+    for itemName, data in pairs(Consumables) do
+        Bridge.RegisterUsableItem(itemName, function(src, item)
+            if Bridge.RemoveItem(src, itemName, 1, item and item.slot) then
+                -- Animación y efectos en el cliente
+                TriggerClientEvent("JGR_IlegalSystem:Client:UseConsumable", src, itemName, data)
+            end
         end)
     end
+    -- "rolling_paper" se registra en modules/drugs/server/processing.lua (antes estaba duplicado aquí
+    -- y el registro de un archivo pisaba al del otro).
 end)
 
+-- Liado desde el menú del Grow Shop (compatibilidad con el flujo antiguo).
 RegisterNetEvent('JGR_IlegalSystem:Server:FinishRolling', function(reqItem, rewardItem, paperReq)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-
     reqItem = tostring(reqItem or "")
     rewardItem = tostring(rewardItem or "")
-    paperReq = tonumber(paperReq) or 1
-    if paperReq < 1 then return end
+    paperReq = Bridge.Util.ToInt(paperReq, 1, 10)
+    if not paperReq then return end
 
-    -- Server-side whitelist: never trust item names sent by client.
-    local isAllowed = false
+    -- Lista blanca en el servidor: nunca se confía en los nombres de item del cliente.
+    local recipe = nil
     for _, cfg in ipairs((Config.Processing and Config.Processing.Joints) or {}) do
-        if cfg.bud == reqItem and cfg.result == rewardItem and tonumber(cfg.paper_amt or 1) == paperReq then
-            isAllowed = true
+        if cfg.bud == reqItem and cfg.result == rewardItem and (tonumber(cfg.paper_amt) or 1) == paperReq then
+            recipe = cfg
             break
         end
     end
-    if not isAllowed then
-        TriggerClientEvent('QBCore:Notify', src, "Receta inválida.", "error")
+    if not recipe then
+        Bridge.Notify(src, "Receta inválida.", "error")
         return
     end
 
-    local hasBud = Player.Functions.GetItemByName(reqItem)
-    local hasPaper = Player.Functions.GetItemByName("rolling_paper")
+    local paperItem = recipe.paper or "rolling_paper"
+    if Bridge.GetItemCount(src, reqItem) < 1 or Bridge.GetItemCount(src, paperItem) < paperReq then
+        Bridge.Notify(src, "Te faltan materiales para liar esto.", "error")
+        return
+    end
+    if not Bridge.CanCarryItem(src, rewardItem, 1) then
+        Bridge.Notify(src, "No tienes espacio en el inventario.", "error")
+        return
+    end
 
-    if hasBud and hasBud.amount >= 1 and hasPaper and hasPaper.amount >= paperReq then
-        Player.Functions.RemoveItem(reqItem, 1)
-        Player.Functions.RemoveItem("rolling_paper", paperReq)
-        Player.Functions.AddItem(rewardItem, 1)
-        TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[rewardItem], "add")
-    else
-        TriggerClientEvent('QBCore:Notify', src, "Te faltan materiales para liar esto.", "error")
+    if Bridge.RemoveItem(src, reqItem, 1) then
+        if Bridge.RemoveItem(src, paperItem, paperReq) then
+            Bridge.AddItem(src, rewardItem, 1)
+        else
+            Bridge.AddItem(src, reqItem, 1) -- devolver el cogollo si falló el papel
+        end
     end
 end)

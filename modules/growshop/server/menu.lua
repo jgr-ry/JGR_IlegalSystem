@@ -1,213 +1,248 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Servidor: compras mayoristas, repartos y crafteo de "El Cocinero" del Grow Shop
+-- Los fondos de la sociedad se gestionan en modules/growshop/server/management.lua
 
--- Society funds are now fetched via JGR_IlegalSystem:Server:GetSocietyFunds in server/management.lua
+local GS = JGR.GrowShop
+local U = Bridge.Util
 
-local PendingOrders = {}
+local MAX_QTY_PER_ITEM = 1000
+local PICKUP_RADIUS = 10.0
+
+local PendingOrders = {} -- [identifier] = { items = { [item] = qty }, kind = 'pickup'|'delivery', readyAt, coords }
+local PendingCrafts = {} -- [identifier] = { recipeId, batches, readyAt }
+
+local function wholesaleItem(itemName)
+    for _, wItem in pairs(Config.GrowShop.Wholesale) do
+        if wItem.item == itemName then return wItem end
+    end
+    return nil
+end
+
+--- Entrega los items de un pedido al jugador. Lo que no quepa se deja en el almacén del negocio.
+local function giveOrderToPlayer(src, items)
+    for itemKey, qty in pairs(items) do
+        if not Bridge.AddItem(src, itemKey, qty) then
+            if not Bridge.AddItemToStash(Config.GrowShop.Stash.Name, itemKey, qty) then
+                print(('^1[JGR_IlegalSystem]^7 No se pudo entregar %dx %s a %s (inventario lleno y almacén no disponible).'):format(qty, itemKey, src))
+            end
+        end
+    end
+end
+
+--- Deja un pedido en el almacén del negocio. Si no se puede (sin ox_inventory/qb-inventory), se le da al jugador.
+local function deliverOrderToStash(src, items)
+    local stashName = Config.GrowShop.Stash.Name
+    local leftovers = {}
+    for itemKey, qty in pairs(items) do
+        if not Bridge.AddItemToStash(stashName, itemKey, qty) then
+            leftovers[itemKey] = qty
+        end
+    end
+    if next(leftovers) and src and Bridge.IsOnline(src) then
+        giveOrderToPlayer(src, leftovers)
+        return false
+    end
+    return true
+end
 
 RegisterNetEvent('JGR_IlegalSystem:Server:CheckoutCart', function(cartData)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
     if not Config.GrowShop.Enabled then return end
+    if not GS.IsManager(src) then
+        Bridge.Notify(src, "No tienes permisos de gestión.", "error")
+        return
+    end
+    local identifier = Bridge.GetIdentifier(src)
+    if not identifier then return end
 
-    if Player.PlayerData.job.name ~= Config.GrowShop.JobName then return end
+    local pending = PendingOrders[identifier]
+    if pending then
+        if pending.kind == 'delivery' and os.time() > (pending.readyAt or 0) + 180 then
+            -- El repartidor nunca llegó a confirmar (cliente reiniciado, NPC atascado…): se entrega ya.
+            PendingOrders[identifier] = nil
+            deliverOrderToStash(src, pending.items)
+        elseif pending.kind == 'pickup' then
+            TriggerClientEvent('JGR_IlegalSystem:Client:StartPickupMission', src, pending.coords)
+            Bridge.Notify(src, "Ya tienes un pedido pendiente. Te hemos vuelto a marcar el punto de recogida.", "error")
+            return
+        else
+            Bridge.Notify(src, "Ya tienes un pedido pendiente. Espera a que llegue antes de hacer otro.", "error")
+            return
+        end
+    end
 
     if type(cartData) ~= "table" then
-        TriggerClientEvent('QBCore:Notify', src, "Carrito inválido.", "error")
+        Bridge.Notify(src, "Carrito inválido.", "error")
         return
     end
 
-    local totalCost = 0
-    local totalItems = 0
-    -- Verify pricing against config
+    -- Precios y cantidades se calculan en el servidor con la configuración, nunca con lo que envía el cliente.
+    local items, totalCost, totalItems = {}, 0, 0
     for itemKey, cartItem in pairs(cartData) do
-        local qty = tonumber(cartItem and cartItem.qty) or 0
-        if qty <= 0 then
-            TriggerClientEvent('QBCore:Notify', src, "Cantidad inválida en el carrito.", "error")
+        local qty = U.ToInt(type(cartItem) == "table" and cartItem.qty, 1, MAX_QTY_PER_ITEM)
+        if not qty then
+            Bridge.Notify(src, "Cantidad inválida en el carrito.", "error")
             return
         end
-
-        local configItem = nil
-        for _, wItem in pairs(Config.GrowShop.Wholesale) do
-            if wItem.item == itemKey then
-                configItem = wItem
-                break
-            end
-        end
-        if configItem then
-            totalCost = totalCost + (configItem.price * qty)
-            totalItems = totalItems + qty
-        else
-            TriggerClientEvent('QBCore:Notify', src, "Objeto inválido en el carrito.", "error")
+        local configItem = type(itemKey) == "string" and wholesaleItem(itemKey)
+        if not configItem then
+            Bridge.Notify(src, "Objeto inválido en el carrito.", "error")
             return
         end
+        items[itemKey] = qty
+        totalCost = totalCost + (configItem.price * qty)
+        totalItems = totalItems + qty
     end
 
     if totalCost <= 0 then return end
-    
-    -- Try to remove money from society
-    local fundsResult = MySQL.query.await('SELECT funds FROM jgr_societies WHERE job_name = ?', {Config.GrowShop.JobName})
-    local currentFunds = 0
-    if fundsResult and #fundsResult > 0 then currentFunds = fundsResult[1].funds end
-    
-    if currentFunds >= totalCost then
-        MySQL.update.await('UPDATE jgr_societies SET funds = funds - ? WHERE job_name = ?', {totalCost, Config.GrowShop.JobName})
-        
-        -- Store the pending order
-        PendingOrders[Player.PlayerData.citizenid] = cartData
 
-        -- Update UI society money
-        local newFunds = currentFunds - totalCost
-        TriggerClientEvent('JGR_IlegalSystem:Client:UpdateGrowShopMoney', src, newFunds)
+    -- Cobro atómico: solo descuenta si hay fondos suficientes.
+    local jobName = Config.GrowShop.JobName
+    local affected = MySQL.update.await('UPDATE jgr_societies SET funds = funds - ? WHERE job_name = ? AND funds >= ?', { totalCost, jobName, totalCost })
+    if (affected or 0) < 1 then
+        Bridge.Notify(src, "La sociedad no tiene fondos suficientes.", "error")
+        return
+    end
 
-        if totalItems < 6 then
-            -- SMALL ORDER: NPC delivers to stash in 3-5 minutes
-            local deliverySeconds = math.random(180, 300) -- 3 to 5 minutes
-            TriggerClientEvent('JGR_IlegalSystem:Client:StartDeliveryTimer', src, deliverySeconds)
-            TriggerClientEvent('QBCore:Notify', src, ("Pedido pequeño (%s uds). Un repartidor lo traerá en %d minutos."):format(totalItems, math.ceil(deliverySeconds / 60)), "primary")
+    local newFunds = MySQL.scalar.await('SELECT funds FROM jgr_societies WHERE job_name = ?', { jobName }) or 0
+    TriggerClientEvent('JGR_IlegalSystem:Client:UpdateGrowShopMoney', src, newFunds)
 
-            SetTimeout(deliverySeconds * 1000, function()
-                local StillPlayer = QBCore.Functions.GetPlayer(src)
-                if StillPlayer then
-                    TriggerClientEvent('JGR_IlegalSystem:Client:DeliveryArrived', src)
-                end
-            end)
-        else
-            -- LARGE ORDER: Go pick it up
-            local spawnPoints = Config.GrowShop.DeliveryPoints
-            local dropoffCoords = spawnPoints[math.random(1, #spawnPoints)]
-            TriggerClientEvent('JGR_IlegalSystem:Client:StartPickupMission', src, dropoffCoords)
-            TriggerClientEvent('QBCore:Notify', src, ("Pedido grande (%s uds). Ve con la furgoneta al punto marcado en el GPS."):format(totalItems), "primary")
-        end
+    if totalItems < 6 then
+        -- PEDIDO PEQUEÑO: un repartidor lo deja en el almacén en 3-5 minutos
+        local deliverySeconds = math.random(180, 300)
+        PendingOrders[identifier] = { items = items, kind = 'delivery', readyAt = os.time() + deliverySeconds }
+        TriggerClientEvent('JGR_IlegalSystem:Client:StartDeliveryTimer', src, deliverySeconds)
+        Bridge.Notify(src, ("Pedido pequeño (%s uds). Un repartidor lo traerá en %d minutos."):format(totalItems, math.ceil(deliverySeconds / 60)), "primary")
+
+        SetTimeout(deliverySeconds * 1000, function()
+            local order = PendingOrders[identifier]
+            if not order or order.kind ~= 'delivery' then return end
+            local current = Bridge.GetSourceFromIdentifier(identifier)
+            if current then
+                -- El cliente reproduce la llegada del repartidor y luego avisa con CompleteDelivery.
+                TriggerClientEvent('JGR_IlegalSystem:Client:DeliveryArrived', current)
+            else
+                -- El jugador se desconectó: el pedido se deja directamente en el almacén.
+                deliverOrderToStash(nil, order.items)
+                PendingOrders[identifier] = nil
+            end
+        end)
     else
-        TriggerClientEvent('QBCore:Notify', src, "La sociedad no tiene fondos suficientes.", "error")
+        -- PEDIDO GRANDE: hay que ir a recogerlo con la furgoneta
+        local spawnPoints = Config.GrowShop.DeliveryPoints
+        local dropoffCoords = spawnPoints[math.random(1, #spawnPoints)]
+        PendingOrders[identifier] = { items = items, kind = 'pickup', coords = dropoffCoords }
+        TriggerClientEvent('JGR_IlegalSystem:Client:StartPickupMission', src, dropoffCoords)
+        Bridge.Notify(src, ("Pedido grande (%s uds). Ve con la furgoneta al punto marcado en el GPS."):format(totalItems), "primary")
     end
 end)
 
 RegisterNetEvent('JGR_IlegalSystem:Server:CompletePickup', function()
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-    
-    local citz = Player.PlayerData.citizenid
-    local order = PendingOrders[citz]
-    
-    if not order then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes ningún pedido pendiente de recoger.", "error")
+    local identifier = Bridge.GetIdentifier(src)
+    if not identifier then return end
+    local order = PendingOrders[identifier]
+
+    if not order or order.kind ~= 'pickup' then
+        Bridge.Notify(src, "No tienes ningún pedido pendiente de recoger.", "error")
         return
     end
 
-    -- Give the items
-    for itemKey, cartItem in pairs(order) do
-        Player.Functions.AddItem(itemKey, cartItem.qty)
-        TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[itemKey], "add", cartItem.qty)
+    local ped = GetPlayerPed(src)
+    local c = order.coords
+    if not ped or ped == 0 or #(GetEntityCoords(ped) - vector3(c.x, c.y, c.z)) > PICKUP_RADIUS then
+        Bridge.Notify(src, "Tienes que estar en el punto de recogida.", "error")
+        return
     end
-    
+
+    PendingOrders[identifier] = nil
+    giveOrderToPlayer(src, order.items)
     TriggerClientEvent('JGR_IlegalSystem:Client:RemovePickupTarget', src)
-    TriggerClientEvent('QBCore:Notify', src, "Has recogido con éxito todo el pedido.", "success")
-    PendingOrders[citz] = nil
+    Bridge.Notify(src, "Has recogido con éxito todo el pedido.", "success")
 end)
 
--- Small order: NPC delivered items go into the business stash
+-- Pedido pequeño: el repartidor deja los items en el almacén del negocio
 RegisterNetEvent('JGR_IlegalSystem:Server:CompleteDelivery', function()
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-    
-    local citz = Player.PlayerData.citizenid
-    local order = PendingOrders[citz]
-    
-    if not order then return end
+    local identifier = Bridge.GetIdentifier(src)
+    if not identifier then return end
+    local order = PendingOrders[identifier]
+    if not order or order.kind ~= 'delivery' or os.time() < (order.readyAt or 0) then return end
 
-    -- Add items to the stash instead of player inventory
-    local stashName = Config.GrowShop.Stash.Name
-    for itemKey, cartItem in pairs(order) do
-        -- Use QBCore stash inventory export to add items directly to the stash
-        exports['qb-inventory']:AddItem(stashName, itemKey, cartItem.qty, false, false, 'stash')
+    PendingOrders[identifier] = nil
+    if deliverOrderToStash(src, order.items) then
+        Bridge.Notify(src, "El repartidor ha dejado el pedido en el almacén del negocio.", "success")
+    else
+        Bridge.Notify(src, "El almacén no está disponible: el pedido se ha entregado en tu inventario.", "primary")
     end
-    
-    TriggerClientEvent('QBCore:Notify', src, "El repartidor ha dejado el pedido en el almacén del negocio.", "success")
-    PendingOrders[citz] = nil
 end)
 
 RegisterNetEvent('JGR_IlegalSystem:Server:CraftGrowItem', function(recipeId, batches)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
     if not Config.GrowShop.Enabled then return end
+    if not GS.IsManager(src) then
+        Bridge.Notify(src, "No tienes permisos de gestión.", "error")
+        return
+    end
+    local identifier = Bridge.GetIdentifier(src)
+    if not identifier then return end
 
-    if Player.PlayerData.job.name ~= Config.GrowShop.JobName then return end
-
-    local recipe = Config.GrowShop.Crafting[recipeId]
+    local recipe = type(recipeId) == "string" and Config.GrowShop.Crafting[recipeId]
     if not recipe then return end
-    batches = tonumber(batches) or 0
-    if batches <= 0 then
-        TriggerClientEvent('QBCore:Notify', src, "Cantidad inválida para craftear.", "error")
+    batches = U.ToInt(batches, 1, 100)
+    if not batches then
+        Bridge.Notify(src, "Cantidad inválida para craftear.", "error")
         return
     end
 
-    -- Validate if player has all required items in sufficient quantities
-    local hasAllItems = true
-    for _, req in pairs(recipe.required) do
-        local requiredAmount = req.amount * batches
-        local playerItem = Player.Functions.GetItemByName(req.item)
-        if not playerItem or playerItem.amount < requiredAmount then
-            hasAllItems = false
-            break
+    local pendingCraft = PendingCrafts[identifier]
+    if pendingCraft then
+        if os.time() > pendingCraft.readyAt + 120 then
+            -- El encargo anterior nunca se recogió (desconexión, NPC atascado…): se entrega ahora.
+            PendingCrafts[identifier] = nil
+            local prev = Config.GrowShop.Crafting[pendingCraft.recipeId]
+            if prev then giveOrderToPlayer(src, { [pendingCraft.recipeId] = prev.amount * pendingCraft.batches }) end
+        else
+            Bridge.Notify(src, "El Cocinero todavía está con tu pedido anterior.", "error")
+            return
         end
     end
 
-    if not hasAllItems then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes los materiales suficientes en tu inventario.", "error")
-        return
-    end
-
-    -- Remove required items
     for _, req in pairs(recipe.required) do
-        local requiredAmount = req.amount * batches
-        Player.Functions.RemoveItem(req.item, requiredAmount)
-        TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[req.item], "remove", requiredAmount)
+        if Bridge.GetItemCount(src, req.item) < req.amount * batches then
+            Bridge.Notify(src, "No tienes los materiales suficientes en tu inventario.", "error")
+            return
+        end
     end
 
-    -- Trigger Client NPC to go inside
-    TriggerClientEvent('JGR_IlegalSystem:Client:RunNPCSequence', src, false)
-    TriggerClientEvent('QBCore:Notify', src, "El Mensajero ha recogido los materiales. El Cocinero se pone manos a la obra.", "primary")
+    for _, req in pairs(recipe.required) do
+        Bridge.RemoveItem(src, req.item, req.amount * batches)
+    end
 
-    -- Server Timer (Simulated craft time)
+    PendingCrafts[identifier] = { recipeId = recipeId, batches = batches, readyAt = os.time() + 15 }
+
+    TriggerClientEvent('JGR_IlegalSystem:Client:RunNPCSequence', src, false)
+    Bridge.Notify(src, "El Mensajero ha recogido los materiales. El Cocinero se pone manos a la obra.", "primary")
+
     SetTimeout(15000, function()
-        -- Wait for player to still be online
-        local StillPlayer = QBCore.Functions.GetPlayer(src)
-        if StillPlayer then
-            TriggerClientEvent('JGR_IlegalSystem:Client:RunNPCSequence', src, true)
-            
-            -- Save pending craft to be collected when NPC leaves
-            PendingOrders["CRAFT_"..StillPlayer.PlayerData.citizenid] = {
-                recipeId = recipeId,
-                batches = batches
-            }
+        local current = Bridge.GetSourceFromIdentifier(identifier)
+        if current then
+            TriggerClientEvent('JGR_IlegalSystem:Client:RunNPCSequence', current, true)
         end
     end)
 end)
 
 RegisterNetEvent('JGR_IlegalSystem:Server:CookFinished', function()
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-    
-    local citz = Player.PlayerData.citizenid
-    local craftData = PendingOrders["CRAFT_"..citz]
-    
-    if craftData then
-        local recipeId = craftData.recipeId
-        local batches = craftData.batches
-        local recipe = Config.GrowShop.Crafting[recipeId]
-        
-        if recipe then
-            local rewardAmount = recipe.amount * batches
-            Player.Functions.AddItem(recipeId, rewardAmount)
-            TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[recipeId], "add", rewardAmount)
-            TriggerClientEvent('QBCore:Notify', src, ("El Cocinero ha terminado %sx %s y se han entregado."):format(rewardAmount, recipe.label), "success")
-        end
-        PendingOrders["CRAFT_"..citz] = nil
-    end
+    local identifier = Bridge.GetIdentifier(src)
+    if not identifier then return end
+    local craftData = PendingCrafts[identifier]
+    if not craftData or os.time() < craftData.readyAt then return end
+
+    PendingCrafts[identifier] = nil
+    local recipe = Config.GrowShop.Crafting[craftData.recipeId]
+    if not recipe then return end
+
+    local rewardAmount = recipe.amount * craftData.batches
+    giveOrderToPlayer(src, { [craftData.recipeId] = rewardAmount })
+    Bridge.Notify(src, ("El Cocinero ha terminado %sx %s y se han entregado."):format(rewardAmount, recipe.label), "success")
 end)

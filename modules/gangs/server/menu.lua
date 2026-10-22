@@ -1,11 +1,22 @@
+-- Servidor: menú de banda (miembros, rangos, documentos, territorios, puntos, almacén y garaje)
+
 JGR.RegisterModule("gang_menu_server", function()
+    local U = Bridge.Util
+
+    local MAX_DOCUMENTS = tonumber(Config.GangSystem.MaxDocuments) or 100
+    local MAX_TERRITORIES = tonumber(Config.GangSystem.MaxTerritories) or 50
+    local MAX_DOC_LENGTH = 5000
+    local PERM_KEYS = { "manage_members", "manage_points", "manage_ranks", "manage_docs", "manage_territories" }
+
+    local function L(key, ...)
+        local t = Locales[Config.Locale] and Locales[Config.Locale][key]
+        if not t then return nil end
+        return select('#', ...) > 0 and string.format(t, ...) or t
+    end
+
     local function isRankBoss(rankName, r)
         if not rankName then return false end
-        if type(r) ~= "table" then
-            local n = string.lower(tostring(rankName))
-            return n == "jefe" or n == "boss"
-        end
-        if r.isBoss then return true end
+        if type(r) == "table" and r.isBoss then return true end
         local n = string.lower(tostring(rankName))
         return n == "jefe" or n == "boss"
     end
@@ -26,222 +37,7 @@ JGR.RegisterModule("gang_menu_server", function()
         local out = {}
         if bossName then out[#out + 1] = bossName end
         for _, n in ipairs(rest) do out[#out + 1] = n end
-        if #out == 0 then
-            for k in pairs(ranks) do out[#out + 1] = k end
-            table.sort(out)
-        end
         return out
-    end
-
-    -- Fetch Gang Data for NUI
-    local function getGangMenuData(source, gangName, cb)
-        if type(gangName) == "string" then
-            gangName = gangName:match("^%s*(.-)%s*$") or gangName
-        end
-        if not gangName or gangName == "" then return cb(nil) end
-
-        local citizenid = nil
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(source)
-            if Player then citizenid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(source)
-            if Player then citizenid = Player.identifier end
-        end
-
-        if not citizenid then return cb(nil) end
-
-        -- Fetch main gang details
-        MySQL.query('SELECT * FROM jgr_gangs WHERE name = ?', {gangName}, function(gangResult)
-            if not gangResult or #gangResult == 0 then return cb(nil) end
-            local gangData = gangResult[1]
-            do
-                local okR, ranks = pcall(json.decode, gangData.ranks or "{}")
-                gangData.ranks = (okR and type(ranks) == "table") and ranks or {}
-                for rk, rv in pairs(gangData.ranks) do
-                    if type(rv) ~= "table" then
-                        gangData.ranks[rk] = {}
-                    end
-                end
-                local okC, coords = pcall(json.decode, gangData.coords or "{}")
-                gangData.coords = (okC and type(coords) == "table") and coords or {}
-            end
-            
-            -- Parse new level stats safely
-            if gangData.stats and gangData.stats ~= "" then
-                local okS, st = pcall(json.decode, gangData.stats)
-                gangData.stats = (okS and type(st) == "table") and st or {}
-            else
-                gangData.stats = {}
-            end
-            if not gangData.stats.documents then gangData.stats.documents = {} end
-            if not gangData.stats.territories then gangData.stats.territories = {} end
-            if not gangData.stats.points or type(gangData.stats.points) ~= "table" then
-                gangData.stats.points = {}
-            end
-            MySQL.query('SELECT citizenid, rank FROM jgr_gang_members WHERE gang_name = ?', {gangName}, function(members)
-                local memberList = {}
-                local rawMembers = members or {}
-
-                -- Determine player permissions
-                local myRankName = nil
-
-                local function SendPayload(gData, mList, mRank, mIsBoss, cbFunc)
-                    local perms = {
-                        rankName = mRank,
-                        isBoss = mIsBoss,
-                        manage_members = mIsBoss,
-                        manage_points = mIsBoss,
-                        manage_ranks = mIsBoss,
-                        manage_docs = mIsBoss,
-                        manage_territories = mIsBoss
-                    }
-
-                    if mRank and gData.ranks[mRank] then
-                        local rData = gData.ranks[mRank]
-                        local rankIsBoss = isRankBoss(mRank, rData)
-                        perms.isBoss = rankIsBoss
-                        if not rankIsBoss then
-                            perms.manage_members = rData.manage_members or false
-                            perms.manage_points = rData.manage_points or false
-                            perms.manage_ranks = rData.manage_ranks or false
-                            perms.manage_docs = rData.manage_docs or false
-                            perms.manage_territories = rData.manage_territories or false
-                        else
-                            perms.manage_members = true
-                            perms.manage_points = true
-                            perms.manage_ranks = true
-                            perms.manage_docs = true
-                            perms.manage_territories = true
-                        end
-                    else
-                        -- Rango no encontrado en JSON de rangos (nombre distinto / datos viejos): no bloquear el menú
-                        perms.isBoss = false
-                        perms.manage_members = true
-                        perms.manage_points = true
-                        perms.manage_ranks = true
-                        perms.manage_docs = true
-                        perms.manage_territories = true
-                    end
-
-                    local terrList = {}
-                    if gData.stats and type(gData.stats.territories) == "table" then
-                        terrList = gData.stats.territories
-                    end
-
-                    local npcCoords = nil
-                    if gData.coords and type(gData.coords) == "table" and gData.coords.x and gData.coords.y then
-                        npcCoords = {
-                            x = gData.coords.x,
-                            y = gData.coords.y,
-                            z = gData.coords.z,
-                            h = gData.coords.h
-                        }
-                    end
-
-                    local controlZone = nil
-                    if gData.stats and type(gData.stats.control_zone) == "table" then
-                        local cz = gData.stats.control_zone
-                        if cz.x and cz.y then
-                            controlZone = {
-                                x = cz.x,
-                                y = cz.y,
-                                z = cz.z or 0.0,
-                                radius = tonumber(cz.radius) or 100.0
-                            }
-                        end
-                    end
-
-                    local terrCount = controlZone and 1 or #terrList
-                    local rankOrder = orderedRankNames(gData.ranks)
-
-                    local payload = {
-                        gang = {
-                            name = gData.name,
-                            color = gData.color,
-                            level = gData.level or 0,
-                            xp = gData.xp or 0,
-                            stats = gData.stats,
-                            territories = terrCount,
-                            members = mList,
-                            documents = gData.stats.documents or {},
-                            territories_list = terrList,
-                            ranks = gData.ranks,
-                            rank_order = rankOrder,
-                            npc_coords = npcCoords,
-                            control_zone = controlZone
-                        },
-                        permissions = perms,
-                        translations = Locales[Config.Locale] or {}
-                    }
-                    cbFunc(payload)
-                end
-
-                -- We will process all members, then fetch their names individually to avoid SQL JOIN Collation crashes
-                for _, m in ipairs(rawMembers) do
-                    if m.citizenid == citizenid then
-                        myRankName = m.rank
-                    end
-
-                    table.insert(memberList, {
-                        citizenid = m.citizenid,
-                        rank = m.rank,
-                        name = m.citizenid, -- Default to ID, will update below
-                        phone = "N/A"
-                    })
-                end
-
-                local myRankData = myRankName and gangData.ranks[myRankName]
-                local isBossPlayer = myRankName and isRankBoss(myRankName, type(myRankData) == "table" and myRankData or {}) or false
-
-                -- Now fill in actual names
-                if #memberList > 0 then
-                    local pCount = #memberList
-                    local processed = 0
-
-                    for i, mem in ipairs(memberList) do
-                        if Config.Framework == "qbcore" then
-                            MySQL.query('SELECT charinfo FROM players WHERE citizenid = ?', {mem.citizenid}, function(pRes)
-                                if pRes and pRes[1] and pRes[1].charinfo then
-                                    local okI, info = pcall(json.decode, pRes[1].charinfo)
-                                    if okI and type(info) == "table" and info then
-                                        mem.name = (info.firstname or "") .. " " .. (info.lastname or "")
-                                        mem.phone = info.phone or "N/A"
-                                    end
-                                end
-                                processed = processed + 1
-                                if processed == pCount then SendPayload(gangData, memberList, myRankName, isBossPlayer, cb) end
-                            end)
-                        elseif Config.Framework == "esx" then
-                            MySQL.query('SELECT firstname, lastname, phone_number FROM users WHERE identifier = ?', {mem.citizenid}, function(pRes)
-                                if pRes and pRes[1] then
-                                    if pRes[1].firstname and pRes[1].lastname then
-                                        mem.name = pRes[1].firstname .. " " .. pRes[1].lastname
-                                    end
-                                    if pRes[1].phone_number then
-                                        mem.phone = pRes[1].phone_number
-                                    end
-                                end
-                                processed = processed + 1
-                                if processed == pCount then SendPayload(gangData, memberList, myRankName, isBossPlayer, cb) end
-                            end)
-                        end
-                    end
-                else
-                    SendPayload(gangData, memberList, myRankName, isBossPlayer, cb)
-                end
-            end)
-        end)
-    end
-
-    if Config.Framework == "qbcore" then
-        Bridge.Core.Functions.CreateCallback('JGR_IlegalSystem:server:GetGangMenuData', function(source, cb, gangName)
-            getGangMenuData(source, gangName, cb)
-        end)
-    elseif Config.Framework == "esx" then
-        Bridge.Core.RegisterServerCallback('JGR_IlegalSystem:server:GetGangMenuData', function(source, cb, gangName)
-            getGangMenuData(source, gangName, cb)
-        end)
     end
 
     local function memberHasPermission(rankName, ranks, key)
@@ -252,739 +48,667 @@ JGR.RegisterModule("gang_menu_server", function()
         end
         if isRankBoss(rankName, r) then return true end
         if type(r) ~= "table" then return false end
-        if r[key] == false then return false end
         return r[key] == true
     end
 
     --- Coincidir rango del desplegable con la clave en JSON (mayúsculas / espacios).
     local function resolveRankNameKey(requested, ranksData)
-        if not requested or type(ranksData) ~= "table" then return nil end
+        if type(requested) ~= "string" or type(ranksData) ~= "table" then return nil end
         if ranksData[requested] ~= nil then return requested end
-        local rl = string.lower(tostring(requested):match("^%s*(.-)%s*$") or "")
+        local rl = string.lower(U.Trim(requested) or "")
         for k in pairs(ranksData) do
             if string.lower(tostring(k)) == rl then return k end
         end
         return nil
     end
 
+    --- Banda y rango del jugador. @return gangName, rankName, citizenid
+    local function getMembership(src)
+        local citizenid = Bridge.GetIdentifier(src)
+        if not citizenid then return nil end
+        local row = MySQL.single.await('SELECT gang_name, `rank` FROM jgr_gang_members WHERE citizenid = ? LIMIT 1', { citizenid })
+        if not row then return nil, nil, citizenid end
+        return row.gang_name, row.rank, citizenid
+    end
+
+    local function loadGang(gangName)
+        local row = MySQL.single.await('SELECT * FROM jgr_gangs WHERE name = ?', { gangName })
+        if not row then return nil end
+        row.ranks = U.SafeDecode(row.ranks, {})
+        for rk, rv in pairs(row.ranks) do
+            if type(rv) ~= "table" then row.ranks[rk] = {} end
+        end
+        row.coords = U.SafeDecode(row.coords, {})
+        row.stats = U.SafeDecode(row.stats, {})
+        return row
+    end
+
+    local function saveStats(gangName, stats)
+        MySQL.update.await('UPDATE jgr_gangs SET stats = ? WHERE name = ?', { json.encode(stats), gangName })
+    end
+
+    local function saveRanks(gangName, ranks)
+        MySQL.update.await('UPDATE jgr_gangs SET ranks = ? WHERE name = ?', { json.encode(ranks), gangName })
+    end
+
+    --- Comprueba banda + permiso del jugador. @return gangName, gangRow, rankName | nil
+    local function requirePermission(src, permKey)
+        local gangName, rankName = getMembership(src)
+        if not gangName then return nil end
+        local gang = loadGang(gangName)
+        if not gang then return nil end
+        if permKey and not memberHasPermission(rankName, gang.ranks, permKey) then
+            Bridge.Notify(src, L('no_permission') or "Sin permiso.", "error")
+            return nil
+        end
+        return gangName, gang, rankName
+    end
+
+    local function playerCoords(src)
+        local ped = GetPlayerPed(src)
+        if not ped or ped == 0 then return nil end
+        return GetEntityCoords(ped)
+    end
+
+    local function isNear(src, point, maxDist)
+        local pc = playerCoords(src)
+        if not pc or type(point) ~= "table" or point.x == nil then return false end
+        return #(pc - vector3(point.x + 0.0, point.y + 0.0, (point.z or pc.z) + 0.0)) <= maxDist
+    end
+
+    local function readCoords(c)
+        if type(c) ~= "table" and type(c) ~= "vector3" and type(c) ~= "vector4" then return nil end
+        local x, y, z = tonumber(c.x), tonumber(c.y), tonumber(c.z)
+        if not (x and y and z) then return nil end
+        return { x = x, y = y, z = z }
+    end
+
+    -- =============================================
+    -- DATOS DEL MENÚ (NUI)
+    -- =============================================
+    local function getGangMenuData(source, gangName)
+        gangName = U.Trim(gangName)
+        if type(gangName) ~= "string" or gangName == "" then return nil end
+
+        local myGang, myRankName, citizenid = getMembership(source)
+        if not citizenid then return nil end
+        -- Solo los miembros (o un admin) pueden ver los datos internos de una banda.
+        if myGang ~= gangName then
+            if not Bridge.IsAdmin(source) then return nil end
+            myRankName = nil
+        end
+
+        local gangData = loadGang(gangName)
+        if not gangData then return nil end
+
+        local stats = gangData.stats
+        stats.documents = type(stats.documents) == "table" and stats.documents or {}
+        stats.territories = type(stats.territories) == "table" and stats.territories or {}
+        stats.points = type(stats.points) == "table" and stats.points or {}
+
+        local members = MySQL.query.await('SELECT citizenid, `rank` FROM jgr_gang_members WHERE gang_name = ?', { gangName }) or {}
+        local ids = {}
+        for i, m in ipairs(members) do ids[i] = m.citizenid end
+        local info = Bridge.GetCharacterInfo(ids)
+
+        local memberList = {}
+        for _, m in ipairs(members) do
+            local ci = info[m.citizenid]
+            memberList[#memberList + 1] = {
+                citizenid = m.citizenid,
+                rank = m.rank,
+                name = ci and ci.name or m.citizenid,
+                phone = ci and ci.phone or "N/A",
+            }
+        end
+
+        local isAdminView = myRankName == nil
+        local perms = { rankName = myRankName, isBoss = isAdminView or isRankBoss(myRankName, gangData.ranks[myRankName]) }
+        for _, key in ipairs(PERM_KEYS) do
+            perms[key] = isAdminView or memberHasPermission(myRankName, gangData.ranks, key)
+        end
+
+        local npcCoords = nil
+        if gangData.coords.x and gangData.coords.y then
+            npcCoords = { x = gangData.coords.x, y = gangData.coords.y, z = gangData.coords.z, h = gangData.coords.h }
+        end
+
+        local controlZone = nil
+        local cz = stats.control_zone
+        if type(cz) == "table" and cz.x and cz.y then
+            controlZone = { x = cz.x, y = cz.y, z = cz.z or 0.0, radius = tonumber(cz.radius) or 100.0 }
+        end
+
+        return {
+            gang = {
+                name = gangData.name,
+                color = gangData.color,
+                level = gangData.level or 0,
+                xp = gangData.xp or 0,
+                stats = stats,
+                territories = controlZone and 1 or #stats.territories,
+                members = memberList,
+                documents = stats.documents,
+                territories_list = stats.territories,
+                ranks = gangData.ranks,
+                rank_order = orderedRankNames(gangData.ranks),
+                npc_coords = npcCoords,
+                control_zone = controlZone
+            },
+            permissions = perms,
+            translations = Locales[Config.Locale] or {}
+        }
+    end
+
+    lib.callback.register('JGR_IlegalSystem:server:GetGangMenuData', function(source, gangName)
+        return getGangMenuData(source, gangName)
+    end)
+
+    -- =============================================
+    -- PUNTOS DE BANDA Y ALMACÉN
+    -- =============================================
     local function gangStashId(gangName)
         return "jgr_gang_" .. tostring(gangName):gsub("%s+", "_")
     end
 
     local function ensureOxGangStashRegistered(gangName, px, py, pz)
-        if GetResourceState("ox_inventory") ~= "started" then return end
-        local id = gangStashId(gangName)
-        local label = "Almacén · " .. tostring(gangName)
         local coords = nil
         if px and py then coords = vector3(px + 0.0, py + 0.0, (pz or 0.0) + 0.0) end
-        pcall(function()
-            exports.ox_inventory:RegisterStash(id, label, 100, 1000000, nil, nil, coords)
-        end)
+        Bridge.RegisterStash(gangStashId(gangName), "Almacén · " .. tostring(gangName), 100, 1000000, nil, coords)
     end
 
-    RegisterNetEvent('JGR_IlegalSystem:server:SaveGangPoint')
-    AddEventHandler('JGR_IlegalSystem:server:SaveGangPoint', function(pointType, coords, heading)
+    local validPointTypes = {
+        stash = true, boss = true,
+        garage_menu = true, garage_spawn = true, garage_store = true,
+        garage = true,
+    }
+
+    RegisterNetEvent('JGR_IlegalSystem:server:SaveGangPoint', function(pointType, coords, heading)
         local src = source
-        local citizenid = nil
-        
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(src)
-            if Player then citizenid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(src)
-            if Player then citizenid = Player.identifier end
+        if type(pointType) ~= "string" or not validPointTypes[pointType] then return end
+        local c = readCoords(coords)
+        if not c then return end
+        -- El punto se coloca con un raycast de 30 m desde la cámara.
+        if not isNear(src, c, 40.0) then return end
+
+        local gangName, gang = requirePermission(src, "manage_points")
+        if not gangName then return end
+
+        local stats = gang.stats
+        if type(stats.points) ~= "table" then stats.points = {} end
+        stats.points[pointType] = { x = c.x, y = c.y, z = c.z, h = tonumber(heading) or 0.0 }
+        saveStats(gangName, stats)
+        if pointType == "stash" then
+            ensureOxGangStashRegistered(gangName, c.x, c.y, c.z)
         end
-        
-        if not citizenid then return end
-        if type(pointType) ~= "string" then return end
-
-        local validPointTypes = {
-            stash = true, boss = true,
-            garage_menu = true, garage_spawn = true, garage_store = true,
-            garage = true,
-        }
-        if not validPointTypes[pointType] then return end
-
-        MySQL.query('SELECT gang_name, rank FROM jgr_gang_members WHERE citizenid = ?', {citizenid}, function(memberRes)
-            if not memberRes or #memberRes == 0 then return end
-
-            local gangName = memberRes[1].gang_name
-            local rankName = memberRes[1].rank
-
-            MySQL.query('SELECT stats, ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-               if not gangRes or not gangRes[1] then return end
-               local ranks = {}
-               local okR, rdec = pcall(json.decode, gangRes[1].ranks or "{}")
-               if okR and type(rdec) == "table" then ranks = rdec end
-               if not memberHasPermission(rankName, ranks, "manage_points") then
-                   Bridge.Notify(src, Locales[Config.Locale]['no_permission'] or "Sin permiso.", "error")
-                   return
-               end
-
-               local statsRaw = gangRes[1].stats
-               local stats = {}
-               if statsRaw and statsRaw ~= "" then
-                   local okSt, dec = pcall(json.decode, statsRaw)
-                   if okSt and type(dec) == "table" then stats = dec end
-               end
-               if not stats.points then stats.points = {} end
-               stats.points[pointType] = { x = coords.x, y = coords.y, z = coords.z, h = heading }
-               MySQL.update('UPDATE jgr_gangs SET stats = ? WHERE name = ?', {json.encode(stats), gangName}, function()
-                   if pointType == "stash" then
-                       ensureOxGangStashRegistered(gangName, coords.x, coords.y, coords.z)
-                   end
-                   TriggerClientEvent('JGR_IlegalSystem:client:RefreshGangPoints', src)
-               end)
-            end)
-        end)
+        TriggerClientEvent('JGR_IlegalSystem:client:RefreshGangPoints', src)
     end)
+
+    local function useOxForGangStash()
+        local pref = string.lower(tostring(Config.GangInventory or "auto"))
+        if pref == "qb-inventory" then return false end
+        return Bridge.IsStarted("ox_inventory")
+    end
 
     RegisterNetEvent('JGR_IlegalSystem:server:RequestOpenGangStash', function()
         local src = source
-        if Config.GangInventory ~= "ox_inventory" then return end
-        if GetResourceState("ox_inventory") ~= "started" then
-            Bridge.Notify(src, "ox_inventory no está iniciado.", "error")
+        local gangName, gang = requirePermission(src, nil)
+        if not gangName then return end
+
+        local stash = type(gang.stats.points) == "table" and gang.stats.points.stash
+        if not stash or stash.x == nil then
+            Bridge.Notify(src, "La banda no tiene almacén colocado.", "error")
             return
         end
-        local citizenid = nil
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(src)
-            if Player then citizenid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(src)
-            if Player then citizenid = Player.identifier end
+        if not isNear(src, stash, 3.2) then
+            Bridge.Notify(src, "Demasiado lejos del almacén.", "error")
+            return
         end
-        if not citizenid then return end
-        MySQL.query('SELECT gang_name FROM jgr_gang_members WHERE citizenid = ?', {citizenid}, function(mr)
-            if not mr or #mr == 0 then return end
-            local gangName = mr[1].gang_name
-            MySQL.query('SELECT stats FROM jgr_gangs WHERE name = ?', {gangName}, function(gr)
-                if not gr or #gr == 0 then return end
-                local stats = {}
-                if gr[1].stats and gr[1].stats ~= "" then
-                    local okS, d = pcall(json.decode, gr[1].stats)
-                    if okS and type(d) == "table" then stats = d end
-                end
-                local stash = stats.points and stats.points.stash
-                if not stash or stash.x == nil then
-                    Bridge.Notify(src, "La banda no tiene almacén colocado.", "error")
-                    return
-                end
-                local ped = GetPlayerPed(src)
-                if not ped or ped == 0 then return end
-                local pc = GetEntityCoords(ped)
-                if #(pc - vector3(stash.x + 0.0, stash.y + 0.0, stash.z + 0.0)) > 3.2 then
-                    Bridge.Notify(src, "Demasiado lejos del almacén.", "error")
-                    return
-                end
-                ensureOxGangStashRegistered(gangName, stash.x, stash.y, stash.z)
-                TriggerClientEvent('JGR_IlegalSystem:client:OpenOxGangStash', src, gangName)
-            end)
-        end)
+
+        if useOxForGangStash() then
+            Bridge.OpenStash(src, gangStashId(gangName), {
+                label = "Almacén · " .. gangName, slots = 100, weight = 1000000,
+                coords = vector3(stash.x + 0.0, stash.y + 0.0, stash.z + 0.0),
+            })
+        else
+            -- Mismo identificador que en versiones anteriores para conservar el contenido.
+            Bridge.OpenStash(src, "gangstash_" .. gangName, { label = "Almacén · " .. gangName, slots = 100, weight = 1000000 })
+        end
     end)
 
+    -- =============================================
+    -- GARAJE DE BANDA
+    -- =============================================
     lib.callback.register('JGR_IlegalSystem:server:GetGangGarageVehicles', function(source)
-        local src = source
-        local citizenid = nil
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(src)
-            if Player then citizenid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(src)
-            if Player then citizenid = Player.identifier end
-        end
-        if not citizenid then return {} end
-        local rows = MySQL.query.await('SELECT stats FROM jgr_gangs g INNER JOIN jgr_gang_members m ON m.gang_name = g.name WHERE m.citizenid = ?', {citizenid})
-        local row = rows and rows[1]
-        if not row or not row.stats or row.stats == "" then return {} end
-        local okS, stats = pcall(json.decode, row.stats)
-        if not okS or type(stats) ~= "table" then return {} end
-        local gg = stats.gang_garage
+        local gangName = getMembership(source)
+        if not gangName then return {} end
+        local gang = loadGang(gangName)
+        local gg = gang and gang.stats.gang_garage
         if type(gg) ~= "table" or type(gg.vehicles) ~= "table" then return {} end
         return gg.vehicles
     end)
 
+    local function plateOf(value)
+        return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+    end
+
     RegisterNetEvent('JGR_IlegalSystem:server:SaveGangGarageVehicle', function(props)
         local src = source
         if type(props) ~= "table" or not props.model then return end
-        local citizenid = nil
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(src)
-            if Player then citizenid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(src)
-            if Player then citizenid = Player.identifier end
+
+        -- El vehículo se comprueba en el servidor: el cliente no puede "guardar" un coche que no tiene.
+        local ped = GetPlayerPed(src)
+        local veh = ped and ped ~= 0 and GetVehiclePedIsIn(ped, false) or 0
+        if veh == 0 or not DoesEntityExist(veh) or GetPedInVehicleSeat(veh, -1) ~= ped then
+            Bridge.Notify(src, "Debes ser el conductor de un vehículo.", "error")
+            return
         end
-        if not citizenid then return end
+        local realModel = GetEntityModel(veh)
+        local propModel = tonumber(props.model) or (type(props.model) == "string" and joaat(props.model)) or nil
+        if not propModel or (propModel & 0xFFFFFFFF) ~= (realModel & 0xFFFFFFFF) then
+            Bridge.Notify(src, "No se pudieron leer los datos del vehículo.", "error")
+            return
+        end
+        props.plate = plateOf(GetVehicleNumberPlateText(veh))
+        local encoded = json.encode(props)
+        if #encoded > 16000 then
+            Bridge.Notify(src, "Los datos del vehículo son demasiado grandes.", "error")
+            return
+        end
+
+        local gangName, gang = requirePermission(src, "manage_points")
+        if not gangName then return end
+
+        local stats = gang.stats
+        local store = type(stats.points) == "table" and stats.points.garage_store
+        if not store or store.x == nil then
+            Bridge.Notify(src, "Falta colocar el punto de guardado de vehículos.", "error")
+            return
+        end
+        if not isNear(src, store, 6.0) then
+            Bridge.Notify(src, "Acércate al punto de guardado del garaje.", "error")
+            return
+        end
+        if type(stats.gang_garage) ~= "table" then stats.gang_garage = { vehicles = {} } end
+        if type(stats.gang_garage.vehicles) ~= "table" then stats.gang_garage.vehicles = {} end
         local maxV = tonumber(Config.GangGarageMaxVehicles) or 8
-        MySQL.query('SELECT gang_name, rank FROM jgr_gang_members WHERE citizenid = ?', {citizenid}, function(mr)
-            if not mr or #mr == 0 then return end
-            local gangName = mr[1].gang_name
-            local rankName = mr[1].rank
-            MySQL.query('SELECT stats, ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(gr)
-                if not gr or #gr == 0 then return end
-                local ranks = {}
-                local okR, rdec = pcall(json.decode, gr[1].ranks or "{}")
-                if okR and type(rdec) == "table" then ranks = rdec end
-                if not memberHasPermission(rankName, ranks, "manage_points") then
-                    Bridge.Notify(src, Locales[Config.Locale]['no_permission'] or "Sin permiso.", "error")
-                    return
-                end
-                local stats = {}
-                if gr[1].stats and gr[1].stats ~= "" then
-                    local okS, d = pcall(json.decode, gr[1].stats)
-                    if okS and type(d) == "table" then stats = d end
-                end
-                local store = stats.points and stats.points.garage_store
-                if not store or store.x == nil then
-                    Bridge.Notify(src, "Falta colocar el punto de guardado de vehículos.", "error")
-                    return
-                end
-                local ped = GetPlayerPed(src)
-                if not ped or ped == 0 then return end
-                local pc = GetEntityCoords(ped)
-                if #(pc - vector3(store.x + 0.0, store.y + 0.0, store.z + 0.0)) > 6.0 then
-                    Bridge.Notify(src, "Acércate al punto de guardado del garaje.", "error")
-                    return
-                end
-                if not stats.gang_garage then stats.gang_garage = { vehicles = {} } end
-                if type(stats.gang_garage.vehicles) ~= "table" then stats.gang_garage.vehicles = {} end
-                if #stats.gang_garage.vehicles >= maxV then
-                    Bridge.Notify(src, "Garaje lleno.", "error")
-                    return
-                end
-                props.stored_at = os.date("%d/%m/%Y %H:%M")
-                table.insert(stats.gang_garage.vehicles, props)
-                MySQL.update('UPDATE jgr_gangs SET stats = ? WHERE name = ?', {json.encode(stats), gangName}, function()
-                    Bridge.Notify(src, "Vehículo guardado en el garaje de la banda.", "success")
-                    TriggerClientEvent('JGR_IlegalSystem:client:DeleteGarageVehicleEntity', src)
-                    TriggerClientEvent('JGR_IlegalSystem:client:RefreshGangPoints', src)
-                end)
-            end)
+        if #stats.gang_garage.vehicles >= maxV then
+            Bridge.Notify(src, "Garaje lleno.", "error")
+            return
+        end
+
+        props.stored_at = os.date("%d/%m/%Y %H:%M")
+        table.insert(stats.gang_garage.vehicles, props)
+        saveStats(gangName, stats)
+
+        TriggerClientEvent('JGR_IlegalSystem:client:DeleteGarageVehicleEntity', src)
+        -- Por si el cliente no lo borra (o hace trampas), se elimina también desde el servidor.
+        SetTimeout(1500, function()
+            if DoesEntityExist(veh) then DeleteEntity(veh) end
         end)
+        Bridge.Notify(src, "Vehículo guardado en el garaje de la banda.", "success")
+        TriggerClientEvent('JGR_IlegalSystem:client:RefreshGangPoints', src)
     end)
 
     RegisterNetEvent('JGR_IlegalSystem:server:SpawnGangGarageVehicle', function(index)
         local src = source
-        local idx = tonumber(index)
-        if not idx or idx < 1 then return end
-        local citizenid = nil
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(src)
-            if Player then citizenid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(src)
-            if Player then citizenid = Player.identifier end
+        local idx = U.ToInt(index, 1, 1000)
+        if not idx then return end
+
+        local gangName, gang = requirePermission(src, nil)
+        if not gangName then return end
+
+        local stats = gang.stats
+        local points = type(stats.points) == "table" and stats.points or {}
+        local menu = points.garage_menu
+        if not menu or menu.x == nil then menu = points.garage end
+        local spawn = points.garage_spawn
+        if not menu or menu.x == nil or not spawn or spawn.x == nil then
+            Bridge.Notify(src, "Faltan puntos de garaje (menú o aparición).", "error")
+            return
         end
-        if not citizenid then return end
-        MySQL.query('SELECT gang_name FROM jgr_gang_members WHERE citizenid = ?', {citizenid}, function(mr)
-            if not mr or #mr == 0 then return end
-            local gangName = mr[1].gang_name
-            MySQL.query('SELECT stats FROM jgr_gangs WHERE name = ?', {gangName}, function(gr)
-                if not gr or #gr == 0 then return end
-                local stats = {}
-                if gr[1].stats and gr[1].stats ~= "" then
-                    local okS, d = pcall(json.decode, gr[1].stats)
-                    if okS and type(d) == "table" then stats = d end
-                end
-                local menu = stats.points and stats.points.garage_menu
-                if not menu or menu.x == nil then
-                    menu = stats.points and stats.points.garage
-                end
-                local spawn = stats.points and stats.points.garage_spawn
-                if not menu or menu.x == nil or not spawn or spawn.x == nil then
-                    Bridge.Notify(src, "Faltan puntos de garaje (menú o aparición).", "error")
-                    return
-                end
-                local ped = GetPlayerPed(src)
-                if not ped or ped == 0 then return end
-                local pc = GetEntityCoords(ped)
-                if #(pc - vector3(menu.x + 0.0, menu.y + 0.0, menu.z + 0.0)) > 3.5 then
-                    Bridge.Notify(src, "Debes estar en el punto de menú del garaje.", "error")
-                    return
-                end
-                local gg = stats.gang_garage
-                if type(gg) ~= "table" or type(gg.vehicles) ~= "table" or not gg.vehicles[idx] then
-                    Bridge.Notify(src, "Vehículo no encontrado.", "error")
-                    return
-                end
-                local props = gg.vehicles[idx]
-                table.remove(gg.vehicles, idx)
-                MySQL.update('UPDATE jgr_gangs SET stats = ? WHERE name = ?', {json.encode(stats), gangName}, function()
-                    TriggerClientEvent('JGR_IlegalSystem:client:SpawnGangGarageVehicle', src, props, spawn)
-                    Bridge.Notify(src, "Saliendo vehículo del garaje…", "success")
-                end)
-            end)
-        end)
+        if not isNear(src, menu, 3.5) then
+            Bridge.Notify(src, "Debes estar en el punto de menú del garaje.", "error")
+            return
+        end
+        local gg = stats.gang_garage
+        if type(gg) ~= "table" or type(gg.vehicles) ~= "table" or not gg.vehicles[idx] then
+            Bridge.Notify(src, "Vehículo no encontrado.", "error")
+            return
+        end
+        local props = table.remove(gg.vehicles, idx)
+        saveStats(gangName, stats)
+        TriggerClientEvent('JGR_IlegalSystem:client:SpawnGangGarageVehicle', src, props, spawn)
+        Bridge.Notify(src, "Saliendo vehículo del garaje…", "success")
     end)
 
-    RegisterNetEvent('JGR_IlegalSystem:server:InviteMember')
-    AddEventHandler('JGR_IlegalSystem:server:InviteMember', function(targetId, rankName)
-        local admin = source
-        local citizenid = nil
-        local targetCitizenId = nil
-
-        targetId = tonumber(targetId) or targetId
-        if type(rankName) == "string" then
-            rankName = rankName:match("^%s*(.-)%s*$")
+    -- =============================================
+    -- MIEMBROS
+    -- =============================================
+    RegisterNetEvent('JGR_IlegalSystem:server:InviteMember', function(targetId, rankName)
+        local src = source
+        targetId = tonumber(targetId)
+        rankName = U.Trim(rankName)
+        if type(rankName) ~= "string" or rankName == "" then
+            Bridge.Notify(src, "Rango no válido.", "error")
+            return
         end
-        if not rankName or rankName == "" then
-            Bridge.Notify(admin, "Rango no válido.", "error")
+        if not targetId or targetId == src or not Bridge.IsOnline(targetId) then
+            Bridge.Notify(src, L('player_not_found') or "Jugador no encontrado.", "error")
             return
         end
 
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(admin)
-            local Target = Bridge.Core.Functions.GetPlayer(tonumber(targetId) or targetId)
-            if Player then citizenid = Player.PlayerData.citizenid end
-            if Target then targetCitizenId = Target.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(admin)
-            local Target = Bridge.Core.GetPlayerFromId(tonumber(targetId) or targetId)
-            if Player then citizenid = Player.identifier end
-            if Target then targetCitizenId = Target.identifier end
+        local gangName, gang, myRank = requirePermission(src, "manage_members")
+        if not gangName then return end
+
+        local targetCitizenId = Bridge.GetIdentifier(targetId)
+        if not targetCitizenId then
+            Bridge.Notify(src, L('player_not_found') or "Jugador no encontrado.", "error")
+            return
         end
 
-        if not citizenid then return end
-        if not targetCitizenId then 
-            Bridge.Notify(admin, Locales[Config.Locale]['player_not_found'], "error")
-            return 
+        local resolvedRank = resolveRankNameKey(rankName, gang.ranks)
+        if not resolvedRank then
+            Bridge.Notify(src, L('rank_not_found', rankName, gangName) or "El rango especificado no existe", "error")
+            return
+        end
+        -- Solo el jefe puede asignar el rango de jefe.
+        if isRankBoss(resolvedRank, gang.ranks[resolvedRank]) and not isRankBoss(myRank, gang.ranks[myRank]) then
+            Bridge.Notify(src, L('no_permission') or "Sin permiso.", "error")
+            return
         end
 
-        -- Check inviter's gang and permissions
-        MySQL.query('SELECT gang_name, rank FROM jgr_gang_members WHERE citizenid = ?', {citizenid}, function(memberRes)
-            if not memberRes or #memberRes == 0 then return end
-            
-            local gangName = memberRes[1].gang_name
-            local myRank = memberRes[1].rank
-            
-            -- Verify Gang Exists & Fetch Ranks
-            MySQL.query('SELECT name, ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(result)
-                if result and #result > 0 then
-                    local ranksData = {}
-                    local okRd, rd = pcall(json.decode, result[1].ranks or "{}")
-                    if okRd and type(rd) == "table" then ranksData = rd end
-
-                    if not memberHasPermission(myRank, ranksData, "manage_members") then
-                        Bridge.Notify(admin, Locales[Config.Locale]['no_permission'] or "Sin permiso.", "error")
-                        return
-                    end
-
-                    local resolvedRank = resolveRankNameKey(rankName, ranksData)
-                    if not resolvedRank then
-                        Bridge.Notify(admin, Locales[Config.Locale]['rank_not_found'] and string.format(Locales[Config.Locale]['rank_not_found'], rankName, gangName) or "El rango especificado no existe", "error")
-                        return
-                    end
-                    rankName = resolvedRank
-
-                    -- Add to members table
-                    MySQL.query('SELECT id FROM jgr_gang_members WHERE citizenid = ? AND gang_name = ?', {targetCitizenId, gangName}, function(targetRes)
-                        if targetRes and #targetRes > 0 then
-                            -- Already in gang, update rank
-                            MySQL.update('UPDATE jgr_gang_members SET rank = ? WHERE citizenid = ? AND gang_name = ?', {rankName, targetCitizenId, gangName}, function(affected)
-                                Bridge.Notify(admin, Locales[Config.Locale]['gang_member_updated'] and string.format(Locales[Config.Locale]['gang_member_updated'], GetPlayerName(targetId), gangName, rankName) or "Miembro actualizado", "success")
-                                Bridge.Notify(targetId, Locales[Config.Locale]['you_are_now_in_gang'] and string.format(Locales[Config.Locale]['you_are_now_in_gang'], gangName, rankName) or "Ahora estás en la banda", "success")
-                                TriggerClientEvent('JGR_IlegalSystem:client:RefreshNPCs', targetId)
-                                TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', admin)
-                            end)
-                        else
-                            -- Insert New Member
-                            MySQL.insert('INSERT INTO jgr_gang_members (gang_name, citizenid, rank) VALUES (?, ?, ?)', {gangName, targetCitizenId, rankName}, function(id)
-                                Bridge.Notify(admin, Locales[Config.Locale]['gang_member_added'] and string.format(Locales[Config.Locale]['gang_member_added'], GetPlayerName(targetId), gangName, rankName) or "Miembro reclutado", "success")
-                                Bridge.Notify(targetId, Locales[Config.Locale]['you_are_now_in_gang'] and string.format(Locales[Config.Locale]['you_are_now_in_gang'], gangName, rankName) or "Has sido reclutado", "success")
-                                TriggerClientEvent('JGR_IlegalSystem:client:RefreshNPCs', targetId)
-                                TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', admin)
-                            end)
-                        end
-                    end)
-                end
-            end)
-        end)
-    end)
-
-    -- =============================================
-    -- DOCUMENT MANAGEMENT
-    -- =============================================
-    local function getPlayerGang(source, cb)
-        local citizenid = nil
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(source)
-            if Player then citizenid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(source)
-            if Player then citizenid = Player.identifier end
+        local targetGang = MySQL.scalar.await('SELECT gang_name FROM jgr_gang_members WHERE citizenid = ? LIMIT 1', { targetCitizenId })
+        if targetGang and targetGang ~= gangName then
+            Bridge.Notify(src, "Ese jugador ya pertenece a otra banda.", "error")
+            return
         end
-        if not citizenid then return cb(nil) end
 
-        MySQL.query('SELECT gang_name FROM jgr_gang_members WHERE citizenid = ?', {citizenid}, function(res)
-            if res and #res > 0 then
-                cb(res[1].gang_name)
-            else
-                cb(nil)
+        local targetName = GetPlayerName(targetId) or tostring(targetId)
+        if targetGang == gangName then
+            local targetRank = MySQL.scalar.await('SELECT `rank` FROM jgr_gang_members WHERE citizenid = ? AND gang_name = ?', { targetCitizenId, gangName })
+            if isRankBoss(targetRank, gang.ranks[targetRank]) and not isRankBoss(myRank, gang.ranks[myRank]) then
+                Bridge.Notify(src, L('no_permission') or "Sin permiso.", "error")
+                return
             end
-        end)
-    end
-
-    local function assertDocOrTerrPerm(src, gangName, permKey, cb)
-        local citizenid = nil
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(src)
-            if Player then citizenid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(src)
-            if Player then citizenid = Player.identifier end
+            MySQL.update.await('UPDATE jgr_gang_members SET `rank` = ? WHERE citizenid = ? AND gang_name = ?', { resolvedRank, targetCitizenId, gangName })
+            Bridge.Notify(src, L('gang_member_updated', targetName, gangName, resolvedRank) or "Miembro actualizado", "success")
+        else
+            local maxMembers = tonumber(gang.max_members) or 10
+            local current = MySQL.scalar.await('SELECT COUNT(*) FROM jgr_gang_members WHERE gang_name = ?', { gangName }) or 0
+            if current >= maxMembers then
+                Bridge.Notify(src, ("La banda está completa (%d/%d miembros)."):format(current, maxMembers), "error")
+                return
+            end
+            MySQL.insert.await('INSERT INTO jgr_gang_members (gang_name, citizenid, `rank`) VALUES (?, ?, ?)', { gangName, targetCitizenId, resolvedRank })
+            Bridge.Notify(src, L('gang_member_added', targetName, gangName, resolvedRank) or "Miembro reclutado", "success")
         end
-        if not citizenid then return end
-        MySQL.query('SELECT rank FROM jgr_gang_members WHERE citizenid = ? AND gang_name = ?', {citizenid, gangName}, function(mr)
-            if not mr or #mr == 0 then return end
-            local rankName = mr[1].rank
-            MySQL.query('SELECT ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(gr)
-                if not gr or #gr == 0 then return end
-                local ranks = {}
-                local okDec, rdec = pcall(json.decode, gr[1].ranks or "{}")
-                if okDec and type(rdec) == "table" then ranks = rdec end
-                if not memberHasPermission(rankName, ranks, permKey) then
-                    Bridge.Notify(src, Locales[Config.Locale]['no_permission'] or "Sin permiso.", "error")
-                    return
-                end
-                cb()
-            end)
-        end)
-    end
-
-    RegisterNetEvent('JGR_IlegalSystem:server:SaveDocument')
-    AddEventHandler('JGR_IlegalSystem:server:SaveDocument', function(docId, title, content)
-        local src = source
-        getPlayerGang(src, function(gangName)
-            if not gangName then return end
-            assertDocOrTerrPerm(src, gangName, "manage_docs", function()
-            MySQL.query('SELECT stats FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-                if not gangRes or #gangRes == 0 then return end
-                local stats = gangRes[1].stats
-                if not stats or stats == "" then stats = {} else stats = json.decode(stats) end
-                if not stats.documents then stats.documents = {} end
-
-                if docId then
-                    -- Update existing
-                    for _, doc in ipairs(stats.documents) do
-                        if doc.id == docId then
-                            doc.title = title
-                            doc.content = content
-                            doc.date = os.date("%d/%m/%Y %H:%M")
-                            break
-                        end
-                    end
-                else
-                    -- Create new
-                    table.insert(stats.documents, {
-                        id = tostring(os.time()) .. tostring(math.random(1000,9999)),
-                        title = title,
-                        content = content,
-                        date = os.date("%d/%m/%Y %H:%M")
-                    })
-                end
-                MySQL.update('UPDATE jgr_gangs SET stats = ? WHERE name = ?', {json.encode(stats), gangName}, function()
-                    TriggerClientEvent('JGR_IlegalSystem:client:UpdateDocuments', src, stats.documents)
-                end)
-            end)
-            end)
-        end)
+        Bridge.Notify(targetId, L('you_are_now_in_gang', gangName, resolvedRank) or "Ahora estás en la banda", "success")
+        TriggerClientEvent('JGR_IlegalSystem:client:RefreshNPCs', targetId)
+        TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', src)
     end)
 
-    RegisterNetEvent('JGR_IlegalSystem:server:DeleteDocument')
-    AddEventHandler('JGR_IlegalSystem:server:DeleteDocument', function(docId)
-        local src = source
-        getPlayerGang(src, function(gangName)
-            if not gangName then return end
-            assertDocOrTerrPerm(src, gangName, "manage_docs", function()
-            MySQL.query('SELECT stats FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-                if not gangRes or #gangRes == 0 then return end
-                local stats = gangRes[1].stats
-                if not stats or stats == "" then stats = {} else stats = json.decode(stats) end
-                if not stats.documents then return end
-
-                for i, doc in ipairs(stats.documents) do
-                    if doc.id == docId then
-                        table.remove(stats.documents, i)
-                        break
-                    end
-                end
-                MySQL.update('UPDATE jgr_gangs SET stats = ? WHERE name = ?', {json.encode(stats), gangName}, function()
-                    TriggerClientEvent('JGR_IlegalSystem:client:UpdateDocuments', src, stats.documents)
-                end)
-            end)
-            end)
-        end)
-    end)
-
-    -- =============================================
-    -- TERRITORIES (persisted in stats.territories, same pattern as documents)
-    -- =============================================
-    RegisterNetEvent('JGR_IlegalSystem:server:SaveTerritory')
-    AddEventHandler('JGR_IlegalSystem:server:SaveTerritory', function(terrId, title, content, influence, coords)
-        local src = source
-        getPlayerGang(src, function(gangName)
-            if not gangName then return end
-            assertDocOrTerrPerm(src, gangName, "manage_territories", function()
-            MySQL.query('SELECT stats FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-                if not gangRes or #gangRes == 0 then return end
-                local stats = gangRes[1].stats
-                if not stats or stats == "" then stats = {} else stats = json.decode(stats) end
-                if not stats.territories then stats.territories = {} end
-
-                local inf = tonumber(influence) or 0
-                if inf < 0 then inf = 0 end
-                if inf > 100 then inf = 100 end
-
-                local wx, wy, wz = nil, nil, nil
-                if coords and coords.x then
-                    wx, wy, wz = coords.x, coords.y, coords.z
-                end
-
-                if terrId and tostring(terrId) ~= "" then
-                    for _, t in ipairs(stats.territories) do
-                        if t.id == terrId then
-                            t.title = title
-                            t.content = content or ""
-                            t.influence = inf
-                            t.date = os.date("%d/%m/%Y %H:%M")
-                            if wx then t.wx, t.wy, t.wz = wx, wy, wz end
-                            break
-                        end
-                    end
-                else
-                    table.insert(stats.territories, {
-                        id = tostring(os.time()) .. tostring(math.random(1000, 9999)),
-                        title = title,
-                        content = content or "",
-                        influence = inf,
-                        wx = wx, wy = wy, wz = wz,
-                        date = os.date("%d/%m/%Y %H:%M")
-                    })
-                end
-
-                MySQL.update('UPDATE jgr_gangs SET stats = ? WHERE name = ?', {json.encode(stats), gangName}, function()
-                    TriggerClientEvent('JGR_IlegalSystem:client:UpdateTerritories', src, stats.territories, #stats.territories)
-                end)
-            end)
-            end)
-        end)
-    end)
-
-    RegisterNetEvent('JGR_IlegalSystem:server:SaveControlZone')
-    AddEventHandler('JGR_IlegalSystem:server:SaveControlZone', function(wx, wy, wz, radius)
-        local src = source
-        if type(wx) ~= "number" or type(wy) ~= "number" then return end
-        local rad = tonumber(radius) or 100.0
-        if rad < 10.0 then rad = 10.0 end
-        if rad > 500.0 then rad = 500.0 end
-        getPlayerGang(src, function(gangName)
-            if not gangName then return end
-            assertDocOrTerrPerm(src, gangName, "manage_territories", function()
-                MySQL.query('SELECT stats FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-                    if not gangRes or #gangRes == 0 then return end
-                    local statsRaw = gangRes[1].stats
-                    local stats = {}
-                    if statsRaw and statsRaw ~= "" then
-                        local okSt, dec = pcall(json.decode, statsRaw)
-                        if okSt and type(dec) == "table" then stats = dec end
-                    end
-                    stats.control_zone = {
-                        x = wx,
-                        y = wy,
-                        z = type(wz) == "number" and wz or 0.0,
-                        radius = rad,
-                        updated = os.date("%d/%m/%Y %H:%M")
-                    }
-                    MySQL.update('UPDATE jgr_gangs SET stats = ? WHERE name = ?', {json.encode(stats), gangName}, function()
-                        Bridge.Notify(src, "Zona de control actualizada.", "success")
-                        TriggerClientEvent('JGR_IlegalSystem:client:UpdateControlZone', src, stats.control_zone)
-                    end)
-                end)
-            end)
-        end)
-    end)
-
-    RegisterNetEvent('JGR_IlegalSystem:server:DeleteTerritory')
-    AddEventHandler('JGR_IlegalSystem:server:DeleteTerritory', function(terrId)
-        local src = source
-        getPlayerGang(src, function(gangName)
-            if not gangName then return end
-            assertDocOrTerrPerm(src, gangName, "manage_territories", function()
-            MySQL.query('SELECT stats FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-                if not gangRes or #gangRes == 0 then return end
-                local stats = gangRes[1].stats
-                if not stats or stats == "" then stats = {} else stats = json.decode(stats) end
-                if not stats.territories then return end
-                for i, t in ipairs(stats.territories) do
-                    if t.id == terrId then
-                        table.remove(stats.territories, i)
-                        break
-                    end
-                end
-                MySQL.update('UPDATE jgr_gangs SET stats = ? WHERE name = ?', {json.encode(stats), gangName}, function()
-                    TriggerClientEvent('JGR_IlegalSystem:client:UpdateTerritories', src, stats.territories, #stats.territories)
-                end)
-            end)
-            end)
-        end)
-    end)
-
-    RegisterNetEvent('JGR_IlegalSystem:server:KickMember')
-    AddEventHandler('JGR_IlegalSystem:server:KickMember', function(targetCitizenId)
+    RegisterNetEvent('JGR_IlegalSystem:server:KickMember', function(targetCitizenId)
         local src = source
         if type(targetCitizenId) ~= "string" then return end
-        local adminCid = nil
-        if Config.Framework == "qbcore" then
-            local Player = Bridge.Core.Functions.GetPlayer(src)
-            if Player then adminCid = Player.PlayerData.citizenid end
-        elseif Config.Framework == "esx" then
-            local Player = Bridge.Core.GetPlayerFromId(src)
-            if Player then adminCid = Player.identifier end
-        end
+
+        local adminCid = Bridge.GetIdentifier(src)
         if not adminCid or adminCid == targetCitizenId then return end
+        local gangName, gang = requirePermission(src, "manage_members")
+        if not gangName then return end
 
-        MySQL.query('SELECT gang_name, rank FROM jgr_gang_members WHERE citizenid = ?', {adminCid}, function(adminMem)
-            if not adminMem or #adminMem == 0 then return end
-            local gangName = adminMem[1].gang_name
-            local adminRank = adminMem[1].rank
-            MySQL.query('SELECT ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(gr)
-                if not gr or #gr == 0 then return end
-                local ranks = {}
-                local okR, rdec = pcall(json.decode, gr[1].ranks or "{}")
-                if okR and type(rdec) == "table" then ranks = rdec end
-                if not memberHasPermission(adminRank, ranks, "manage_members") then
-                    Bridge.Notify(src, Locales[Config.Locale]['no_permission'] or "Sin permiso.", "error")
-                    return
-                end
-                MySQL.query('SELECT rank FROM jgr_gang_members WHERE citizenid = ? AND gang_name = ?', {targetCitizenId, gangName}, function(tm)
-                    if not tm or #tm == 0 then
-                        Bridge.Notify(src, Locales[Config.Locale]['player_not_found'] or "Miembro no encontrado.", "error")
-                        return
-                    end
-                    local tRank = tm[1].rank
-                    local trd = ranks[tRank]
-                    if isRankBoss(tRank, type(trd) == "table" and trd or {}) then
-                        Bridge.Notify(src, "No puedes expulsar al jefe.", "error")
-                        return
-                    end
-                    MySQL.update('DELETE FROM jgr_gang_members WHERE citizenid = ? AND gang_name = ?', {targetCitizenId, gangName}, function()
-                        Bridge.Notify(src, "Miembro expulsado.", "success")
-                        TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', src)
-                        for _, pid in ipairs(GetPlayers()) do
-                            local tid = tonumber(pid)
-                            if tid then
-                                local tcid = nil
-                                if Config.Framework == "qbcore" then
-                                    local tPlayer = Bridge.Core.Functions.GetPlayer(tid)
-                                    if tPlayer then tcid = tPlayer.PlayerData.citizenid end
-                                elseif Config.Framework == "esx" then
-                                    local tPlayer = Bridge.Core.GetPlayerFromId(tid)
-                                    if tPlayer then tcid = tPlayer.identifier end
-                                end
-                                if tcid == targetCitizenId then
-                                    TriggerClientEvent('JGR_IlegalSystem:client:RefreshNPCs', tid)
-                                    Bridge.Notify(tid, "Has sido expulsado de la banda.", "error")
-                                    break
-                                end
-                            end
-                        end
-                    end)
-                end)
-            end)
-        end)
+        local tRank = MySQL.scalar.await('SELECT `rank` FROM jgr_gang_members WHERE citizenid = ? AND gang_name = ?', { targetCitizenId, gangName })
+        if not tRank then
+            Bridge.Notify(src, L('player_not_found') or "Miembro no encontrado.", "error")
+            return
+        end
+        if isRankBoss(tRank, gang.ranks[tRank]) then
+            Bridge.Notify(src, "No puedes expulsar al jefe.", "error")
+            return
+        end
+
+        MySQL.update.await('DELETE FROM jgr_gang_members WHERE citizenid = ? AND gang_name = ?', { targetCitizenId, gangName })
+        Bridge.Notify(src, "Miembro expulsado.", "success")
+        TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', src)
+
+        local tid = Bridge.GetSourceFromIdentifier(targetCitizenId)
+        if tid then
+            TriggerClientEvent('JGR_IlegalSystem:client:RefreshNPCs', tid)
+            Bridge.Notify(tid, "Has sido expulsado de la banda.", "error")
+        end
     end)
 
     -- =============================================
-    -- RANK MANAGEMENT
+    -- DOCUMENTOS
     -- =============================================
-    RegisterNetEvent('JGR_IlegalSystem:server:CreateRank')
-    AddEventHandler('JGR_IlegalSystem:server:CreateRank', function(rankName)
+    RegisterNetEvent('JGR_IlegalSystem:server:SaveDocument', function(docId, title, content)
         local src = source
-        getPlayerGang(src, function(gangName)
-            if not gangName then return end
-            assertDocOrTerrPerm(src, gangName, "manage_ranks", function()
-            MySQL.query('SELECT ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-                if not gangRes or #gangRes == 0 then return end
-                local ranks = {}
-                local okDec, rdec = pcall(json.decode, gangRes[1].ranks or "{}")
-                if okDec and type(rdec) == "table" then ranks = rdec end
-                if ranks[rankName] then
-                    Bridge.Notify(src, "El rango '" .. rankName .. "' ya existe.", "error")
-                    return
+        title = U.CleanText(title, 80)
+        if not title then
+            Bridge.Notify(src, "El documento necesita un título.", "error")
+            return
+        end
+        content = U.CleanMultiline(content, MAX_DOC_LENGTH)
+
+        local gangName, gang = requirePermission(src, "manage_docs")
+        if not gangName then return end
+
+        local stats = gang.stats
+        if type(stats.documents) ~= "table" then stats.documents = {} end
+
+        if docId ~= nil and docId ~= "" then
+            docId = tostring(docId)
+            for _, doc in ipairs(stats.documents) do
+                if tostring(doc.id) == docId then
+                    doc.title = title
+                    doc.content = content
+                    doc.date = os.date("%d/%m/%Y %H:%M")
+                    break
                 end
-                ranks[rankName] = {}
-                MySQL.update('UPDATE jgr_gangs SET ranks = ? WHERE name = ?', {json.encode(ranks), gangName}, function()
-                    Bridge.Notify(src, "Rango '" .. rankName .. "' creado correctamente.", "success")
-                    TriggerClientEvent('JGR_IlegalSystem:client:UpdateRanks', src, ranks)
-                    TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', src)
-                end)
-            end)
-            end)
-        end)
+            end
+        else
+            if #stats.documents >= MAX_DOCUMENTS then
+                Bridge.Notify(src, ("Límite de documentos alcanzado (%d)."):format(MAX_DOCUMENTS), "error")
+                return
+            end
+            table.insert(stats.documents, {
+                id = tostring(os.time()) .. tostring(math.random(1000, 9999)),
+                title = title,
+                content = content,
+                date = os.date("%d/%m/%Y %H:%M")
+            })
+        end
+        saveStats(gangName, stats)
+        TriggerClientEvent('JGR_IlegalSystem:client:UpdateDocuments', src, stats.documents)
     end)
 
-    RegisterNetEvent('JGR_IlegalSystem:server:DeleteRank')
-    AddEventHandler('JGR_IlegalSystem:server:DeleteRank', function(rankName)
+    RegisterNetEvent('JGR_IlegalSystem:server:DeleteDocument', function(docId)
         local src = source
-        getPlayerGang(src, function(gangName)
-            if not gangName then return end
-            assertDocOrTerrPerm(src, gangName, "manage_ranks", function()
-            MySQL.query('SELECT ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-                if not gangRes or #gangRes == 0 then return end
-                local ranks = {}
-                local okDec, rdec = pcall(json.decode, gangRes[1].ranks or "{}")
-                if okDec and type(rdec) == "table" then ranks = rdec end
-                if not ranks[rankName] then
-                    Bridge.Notify(src, "El rango '" .. rankName .. "' no existe.", "error")
-                    return
-                end
-                if isRankBoss(rankName, ranks[rankName]) then
-                    Bridge.Notify(src, "No puedes eliminar el rango de Jefe.", "error")
-                    return
-                end
-                ranks[rankName] = nil
-                MySQL.update('UPDATE jgr_gangs SET ranks = ? WHERE name = ?', {json.encode(ranks), gangName}, function()
-                    Bridge.Notify(src, "Rango '" .. rankName .. "' eliminado.", "success")
-                    TriggerClientEvent('JGR_IlegalSystem:client:UpdateRanks', src, ranks)
-                    TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', src)
-                end)
-            end)
-            end)
-        end)
+        if docId == nil then return end
+        docId = tostring(docId)
+        local gangName, gang = requirePermission(src, "manage_docs")
+        if not gangName then return end
+
+        local stats = gang.stats
+        if type(stats.documents) ~= "table" then return end
+        for i, doc in ipairs(stats.documents) do
+            if tostring(doc.id) == docId then
+                table.remove(stats.documents, i)
+                break
+            end
+        end
+        saveStats(gangName, stats)
+        TriggerClientEvent('JGR_IlegalSystem:client:UpdateDocuments', src, stats.documents)
     end)
 
-    RegisterNetEvent('JGR_IlegalSystem:server:UpdateRankPermissions')
-    AddEventHandler('JGR_IlegalSystem:server:UpdateRankPermissions', function(rankName, permissions)
+    -- =============================================
+    -- TERRITORIOS (stats.territories) Y ZONA DE CONTROL
+    -- =============================================
+    RegisterNetEvent('JGR_IlegalSystem:server:SaveTerritory', function(terrId, title, content, influence, coords)
         local src = source
-        getPlayerGang(src, function(gangName)
-            if not gangName then return end
-            assertDocOrTerrPerm(src, gangName, "manage_ranks", function()
-            MySQL.query('SELECT ranks FROM jgr_gangs WHERE name = ?', {gangName}, function(gangRes)
-                if not gangRes or #gangRes == 0 then return end
-                local ranks = {}
-                local okDec, rdec = pcall(json.decode, gangRes[1].ranks or "{}")
-                if okDec and type(rdec) == "table" then ranks = rdec end
-                if not ranks[rankName] then return end
-                if isRankBoss(rankName, ranks[rankName]) then
-                    Bridge.Notify(src, "No puedes cambiar permisos del rango de jefe desde aquí.", "error")
-                    return
-                end
+        title = U.CleanText(title, 80, true) or ""
+        content = U.CleanMultiline(content, 2000)
+        local inf = math.max(0, math.min(100, tonumber(influence) or 0))
+        local c = coords and readCoords(coords) or nil
 
-                -- Update permissions
-                ranks[rankName].manage_members = permissions.manage_members
-                ranks[rankName].manage_points = permissions.manage_points
-                ranks[rankName].manage_ranks = permissions.manage_ranks
-                ranks[rankName].manage_docs = permissions.manage_docs
-                ranks[rankName].manage_territories = permissions.manage_territories
-                
-                MySQL.update('UPDATE jgr_gangs SET ranks = ? WHERE name = ?', {json.encode(ranks), gangName}, function()
-                    Bridge.Notify(src, "Permisos de '" .. rankName .. "' actualizados.", "success")
-                    TriggerClientEvent('JGR_IlegalSystem:client:UpdateRanks', src, ranks)
-                    TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', src)
-                end)
-            end)
-            end)
-        end)
+        local gangName, gang = requirePermission(src, "manage_territories")
+        if not gangName then return end
+
+        local stats = gang.stats
+        if type(stats.territories) ~= "table" then stats.territories = {} end
+
+        if terrId ~= nil and tostring(terrId) ~= "" then
+            terrId = tostring(terrId)
+            for _, t in ipairs(stats.territories) do
+                if tostring(t.id) == terrId then
+                    t.title = title
+                    t.content = content
+                    t.influence = inf
+                    t.date = os.date("%d/%m/%Y %H:%M")
+                    if c then t.wx, t.wy, t.wz = c.x, c.y, c.z end
+                    break
+                end
+            end
+        else
+            if #stats.territories >= MAX_TERRITORIES then
+                Bridge.Notify(src, ("Límite de territorios alcanzado (%d)."):format(MAX_TERRITORIES), "error")
+                return
+            end
+            table.insert(stats.territories, {
+                id = tostring(os.time()) .. tostring(math.random(1000, 9999)),
+                title = title,
+                content = content,
+                influence = inf,
+                wx = c and c.x, wy = c and c.y, wz = c and c.z,
+                date = os.date("%d/%m/%Y %H:%M")
+            })
+        end
+
+        saveStats(gangName, stats)
+        TriggerClientEvent('JGR_IlegalSystem:client:UpdateTerritories', src, stats.territories, #stats.territories)
+    end)
+
+    RegisterNetEvent('JGR_IlegalSystem:server:SaveControlZone', function(wx, wy, wz, radius)
+        local src = source
+        if type(wx) ~= "number" or type(wy) ~= "number" then return end
+        local rad = math.max(10.0, math.min(500.0, tonumber(radius) or 100.0))
+
+        local gangName, gang = requirePermission(src, "manage_territories")
+        if not gangName then return end
+
+        local stats = gang.stats
+        stats.control_zone = {
+            x = wx,
+            y = wy,
+            z = type(wz) == "number" and wz or 0.0,
+            radius = rad,
+            updated = os.date("%d/%m/%Y %H:%M")
+        }
+        saveStats(gangName, stats)
+        Bridge.Notify(src, "Zona de control actualizada.", "success")
+        TriggerClientEvent('JGR_IlegalSystem:client:UpdateControlZone', src, stats.control_zone)
+    end)
+
+    RegisterNetEvent('JGR_IlegalSystem:server:DeleteTerritory', function(terrId)
+        local src = source
+        if terrId == nil then return end
+        terrId = tostring(terrId)
+        local gangName, gang = requirePermission(src, "manage_territories")
+        if not gangName then return end
+
+        local stats = gang.stats
+        if type(stats.territories) ~= "table" then return end
+        for i, t in ipairs(stats.territories) do
+            if tostring(t.id) == terrId then
+                table.remove(stats.territories, i)
+                break
+            end
+        end
+        saveStats(gangName, stats)
+        TriggerClientEvent('JGR_IlegalSystem:client:UpdateTerritories', src, stats.territories, #stats.territories)
+    end)
+
+    -- =============================================
+    -- RANGOS
+    -- =============================================
+    local function afterRanksChanged(src, ranks)
+        TriggerClientEvent('JGR_IlegalSystem:client:UpdateRanks', src, ranks)
+        TriggerClientEvent('JGR_IlegalSystem:client:RequestGangMenuResync', src)
+    end
+
+    RegisterNetEvent('JGR_IlegalSystem:server:CreateRank', function(rankName)
+        local src = source
+        rankName = U.CleanText(rankName, 30)
+        if not rankName then return end
+
+        local gangName, gang = requirePermission(src, "manage_ranks")
+        if not gangName then return end
+
+        local ranks = gang.ranks
+        if resolveRankNameKey(rankName, ranks) then
+            Bridge.Notify(src, "El rango '" .. rankName .. "' ya existe.", "error")
+            return
+        end
+        local count = 0
+        for _ in pairs(ranks) do count = count + 1 end
+        local maxRoles = tonumber(Config.GangSystem.MaxRoles) or 10
+        if count >= maxRoles then
+            Bridge.Notify(src, ("Límite de rangos alcanzado (%d)."):format(maxRoles), "error")
+            return
+        end
+        -- Un rango nuevo nunca puede llamarse como el de jefe (heredaría todos los permisos).
+        if isRankBoss(rankName, {}) then
+            Bridge.Notify(src, "Ese nombre está reservado para el rango de jefe.", "error")
+            return
+        end
+
+        ranks[rankName] = {}
+        saveRanks(gangName, ranks)
+        Bridge.Notify(src, "Rango '" .. rankName .. "' creado correctamente.", "success")
+        afterRanksChanged(src, ranks)
+    end)
+
+    RegisterNetEvent('JGR_IlegalSystem:server:DeleteRank', function(rankName)
+        local src = source
+        if type(rankName) ~= "string" then return end
+
+        local gangName, gang = requirePermission(src, "manage_ranks")
+        if not gangName then return end
+
+        local ranks = gang.ranks
+        if not ranks[rankName] then
+            Bridge.Notify(src, "El rango no existe.", "error")
+            return
+        end
+        if isRankBoss(rankName, ranks[rankName]) then
+            Bridge.Notify(src, "No puedes eliminar el rango de Jefe.", "error")
+            return
+        end
+        ranks[rankName] = nil
+        saveRanks(gangName, ranks)
+        Bridge.Notify(src, "Rango '" .. rankName .. "' eliminado.", "success")
+        afterRanksChanged(src, ranks)
+    end)
+
+    RegisterNetEvent('JGR_IlegalSystem:server:UpdateRankPermissions', function(rankName, permissions)
+        local src = source
+        if type(rankName) ~= "string" or type(permissions) ~= "table" then return end
+
+        local gangName, gang = requirePermission(src, "manage_ranks")
+        if not gangName then return end
+
+        local ranks = gang.ranks
+        if not ranks[rankName] then return end
+        if isRankBoss(rankName, ranks[rankName]) then
+            Bridge.Notify(src, "No puedes cambiar permisos del rango de jefe desde aquí.", "error")
+            return
+        end
+
+        for _, key in ipairs(PERM_KEYS) do
+            ranks[rankName][key] = permissions[key] == true
+        end
+        saveRanks(gangName, ranks)
+        Bridge.Notify(src, "Permisos de '" .. rankName .. "' actualizados.", "success")
+        afterRanksChanged(src, ranks)
     end)
 end)

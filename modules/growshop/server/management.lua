@@ -1,193 +1,174 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Servidor: gestión del Grow Shop (fondos de la sociedad y empleados)
 
-local function IsGrowshopManager(Player)
-    if not Player or not Player.PlayerData or not Player.PlayerData.job then return false end
-    if Player.PlayerData.job.name ~= Config.GrowShop.JobName then return false end
-    local grade = Player.PlayerData.job.grade or {}
-    local gradeName = string.lower(tostring(grade.name or ""))
-    local gradeLevel = tostring(grade.level or "")
-
-    for _, rank in pairs(Config.GrowShop.ManagementRanks or {}) do
-        if gradeName == string.lower(tostring(rank)) or gradeLevel == tostring(rank) then
-            return true
-        end
-    end
-    return false
-end
+local GS = JGR.GrowShop
 
 -- ==========================================
--- FUNDS MANAGEMENT
+-- FONDOS DE LA SOCIEDAD
 -- ==========================================
 
--- Check/Init society funds
+--- Lee los fondos y crea la fila si no existe (sin tocar fondos existentes).
 local function GetSocietyFunds(jobName)
-    local result = MySQL.query.await('SELECT funds FROM jgr_societies WHERE job_name = ?', {jobName})
-    if result and #result > 0 then
-        return result[1].funds
-    else
-        -- Initialize to 0 if doesn't exist
-        MySQL.insert.await('INSERT INTO jgr_societies (job_name, funds) VALUES (?, 0) ON DUPLICATE KEY UPDATE funds = 0', {jobName})
-        return 0
-    end
+    local funds = MySQL.scalar.await('SELECT funds FROM jgr_societies WHERE job_name = ?', { jobName })
+    if funds ~= nil then return funds end
+    MySQL.insert.await('INSERT IGNORE INTO jgr_societies (job_name, funds) VALUES (?, 0)', { jobName })
+    return MySQL.scalar.await('SELECT funds FROM jgr_societies WHERE job_name = ?', { jobName }) or 0
 end
 
--- Used by UI Open Callback
-QBCore.Functions.CreateCallback('JGR_IlegalSystem:Server:GetSocietyFunds', function(source, cb, societyName)
-    local funds = GetSocietyFunds(societyName)
-    cb(funds)
+--- Descuenta de forma atómica. Devuelve true si había fondos suficientes.
+function RemoveSocietyFunds(jobName, amount)
+    amount = Bridge.Util.ToInt(amount, 1)
+    if not amount then return false end
+    GetSocietyFunds(jobName)
+    local affected = MySQL.update.await('UPDATE jgr_societies SET funds = funds - ? WHERE job_name = ? AND funds >= ?', { amount, jobName, amount })
+    return (affected or 0) > 0
+end
+
+-- Callback al abrir la UI. Solo devuelve los fondos del propio negocio y a sus gestores.
+lib.callback.register('JGR_IlegalSystem:Server:GetSocietyFunds', function(source)
+    if not GS.IsManager(source) then return nil end
+    return GetSocietyFunds(Config.GrowShop.JobName)
 end)
 
--- Used by server events to deduct (like wholesale)
-function RemoveSocietyFunds(jobName, amount)
-    local current = GetSocietyFunds(jobName)
-    if current >= amount then
-        MySQL.update.await('UPDATE jgr_societies SET funds = funds - ? WHERE job_name = ?', {amount, jobName})
-        return true
-    end
-    return false
-end
-
--- Client NUI Callbacks
 RegisterNetEvent('JGR_IlegalSystem:Server:ManageFunds', function(action, amount)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-
-    if Player.PlayerData.job.name ~= Config.GrowShop.JobName then return end
-
-    if not IsGrowshopManager(Player) then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes permisos de gestión.", "error")
+    if not GS.IsManager(src) then
+        Bridge.Notify(src, "No tienes permisos de gestión.", "error")
         return
     end
 
-    local amountInt = tonumber(amount)
-    if not amountInt or amountInt <= 0 then return end
+    local amountInt = Bridge.Util.ToInt(amount, 1, 100000000)
+    if not amountInt then return end
+    local jobName = Config.GrowShop.JobName
 
     if action == "deposit" then
-        if Player.Functions.RemoveMoney('bank', amountInt, "growshop-deposit") then
-            MySQL.update.await('UPDATE jgr_societies SET funds = funds + ? WHERE job_name = ?', {amountInt, Config.GrowShop.JobName})
-            TriggerClientEvent('QBCore:Notify', src, "Has depositado $" .. amountInt .. " a la sociedad.", "success")
+        if Bridge.RemoveMoney(src, 'bank', amountInt, "growshop-deposit") then
+            GetSocietyFunds(jobName)
+            MySQL.update.await('UPDATE jgr_societies SET funds = funds + ? WHERE job_name = ?', { amountInt, jobName })
+            Bridge.Notify(src, "Has depositado $" .. amountInt .. " a la sociedad.", "success")
         else
-            TriggerClientEvent('QBCore:Notify', src, "No tienes suficiente dinero en el banco.", "error")
+            Bridge.Notify(src, "No tienes suficiente dinero en el banco.", "error")
         end
     elseif action == "withdraw" then
-        if RemoveSocietyFunds(Config.GrowShop.JobName, amountInt) then
-            Player.Functions.AddMoney('bank', amountInt, "growshop-withdraw")
-            TriggerClientEvent('QBCore:Notify', src, "Has retirado $" .. amountInt .. " de la sociedad.", "success")
+        if RemoveSocietyFunds(jobName, amountInt) then
+            if not Bridge.AddMoney(src, 'bank', amountInt, "growshop-withdraw") then
+                -- Si no se pudo pagar al jugador, el dinero vuelve a la sociedad.
+                MySQL.update.await('UPDATE jgr_societies SET funds = funds + ? WHERE job_name = ?', { amountInt, jobName })
+                Bridge.Notify(src, "No se pudo ingresar el dinero.", "error")
+            else
+                Bridge.Notify(src, "Has retirado $" .. amountInt .. " de la sociedad.", "success")
+            end
         else
-            TriggerClientEvent('QBCore:Notify', src, "La sociedad no tiene fondos suficientes.", "error")
+            Bridge.Notify(src, "La sociedad no tiene fondos suficientes.", "error")
         end
+    else
+        return
     end
 
-    -- Trigger update for UI
-    local newFunds = GetSocietyFunds(Config.GrowShop.JobName)
-    TriggerClientEvent('JGR_IlegalSystem:Client:UpdateGrowShopMoney', src, newFunds)
+    TriggerClientEvent('JGR_IlegalSystem:Client:UpdateGrowShopMoney', src, GetSocietyFunds(jobName))
 end)
 
 -- ==========================================
--- EMPLOYEES MANAGEMENT
+-- EMPLEADOS
 -- ==========================================
 
-RegisterNetEvent('JGR_IlegalSystem:Server:GetEmployees', function(requester)
-    local src = tonumber(requester) or source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-
-    if Player.PlayerData.job.name ~= Config.GrowShop.JobName then return end
-
-    -- Query QBCore players table
-    local results = MySQL.query.await('SELECT * FROM players')
+local function SendEmployees(src)
     local employees = {}
-    
-    for _, row in ipairs(results) do
-        local jobData = json.decode(row.job)
-        if jobData and jobData.name == Config.GrowShop.JobName then
-            local charinfo = json.decode(row.charinfo)
-            local fullName = "Desconocido"
-            if charinfo and charinfo.firstname and charinfo.lastname then
-                fullName = charinfo.firstname .. " " .. charinfo.lastname
-            end
-            
-            table.insert(employees, {
-                citizenid = row.citizenid,
-                name = fullName,
-                gradeLevel = jobData.grade.level,
-                gradeLabel = jobData.grade.name
-            })
-        end
+    for _, e in ipairs(Bridge.GetJobEmployees(Config.GrowShop.JobName)) do
+        employees[#employees + 1] = {
+            citizenid = e.identifier, -- el NUI sigue usando "citizenid" (en ESX es el identifier)
+            name = e.name,
+            gradeLevel = e.gradeLevel,
+            gradeLabel = e.gradeLabel,
+        }
     end
-
-    -- Send back to client NUI
     TriggerClientEvent('JGR_IlegalSystem:Client:UpdateEmployeesList', src, employees)
+end
+
+RegisterNetEvent('JGR_IlegalSystem:Server:GetEmployees', function()
+    local src = source
+    if not GS.IsManager(src) then return end
+    SendEmployees(src)
 end)
 
 RegisterNetEvent('JGR_IlegalSystem:Server:FireEmployee', function(targetCitizenId)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-    if not IsGrowshopManager(Player) then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes permisos de gestión.", "error")
+    if not GS.IsManager(src) then
+        Bridge.Notify(src, "No tienes permisos de gestión.", "error")
         return
     end
-    
-    local Target = QBCore.Functions.GetPlayerByCitizenId(targetCitizenId)
-    if Target then
-        -- Player is online
-        Target.Functions.SetJob("unemployed", 0)
-        TriggerClientEvent('QBCore:Notify', Target.PlayerData.source, "Has sido despedido de " .. Config.GrowShop.JobName, "error")
-        TriggerClientEvent('QBCore:Notify', src, "Empleado despedido con éxito.", "success")
-    else
-        -- Player is offline, update DB
-        local result = MySQL.query.await('SELECT job FROM players WHERE citizenid = ?', {targetCitizenId})
-        if result[1] then
-            local jobData = json.decode(result[1].job)
-            jobData.name = "unemployed"
-            jobData.label = "Civil"
-            jobData.payment = 10
-            jobData.onduty = true
-            jobData.isboss = false
-            jobData.grade = {}
-            jobData.grade.name = "Sin Asignar"
-            jobData.grade.level = 0
-            MySQL.update.await('UPDATE players SET job = ? WHERE citizenid = ?', {json.encode(jobData), targetCitizenId})
-            TriggerClientEvent('QBCore:Notify', src, "Empleado (Offline) despedido con éxito.", "success")
-        end
+    if type(targetCitizenId) ~= "string" or targetCitizenId == "" then return end
+    if targetCitizenId == Bridge.GetIdentifier(src) then
+        Bridge.Notify(src, "No puedes despedirte a ti mismo.", "error")
+        return
     end
 
-    -- Refresh lists
-    TriggerEvent('JGR_IlegalSystem:Server:GetEmployees', src)
+    local jobName = Config.GrowShop.JobName
+    local targetSrc = Bridge.GetSourceFromIdentifier(targetCitizenId)
+    if targetSrc then
+        -- Solo se puede despedir a empleados de ESTE negocio.
+        local job = Bridge.GetJob(targetSrc)
+        if not job or job.name ~= jobName then
+            Bridge.Notify(src, "Esa persona no trabaja en el Grow Shop.", "error")
+            return
+        end
+        Bridge.SetJob(targetSrc, "unemployed", 0)
+        Bridge.Notify(targetSrc, "Has sido despedido de " .. jobName, "error")
+        Bridge.Notify(src, "Empleado despedido con éxito.", "success")
+    elseif Bridge.FireOfflineEmployee(targetCitizenId, jobName) then
+        Bridge.Notify(src, "Empleado (desconectado) despedido con éxito.", "success")
+    else
+        Bridge.Notify(src, "No se pudo despedir a ese empleado.", "error")
+    end
+
+    SendEmployees(src)
 end)
 
-RegisterNetEvent('JGR_IlegalSystem:Server:PromoteEmployee', function(targetCitizenId)
+RegisterNetEvent('JGR_IlegalSystem:Server:PromoteEmployee', function()
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-    if not IsGrowshopManager(Player) then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes permisos de gestión.", "error")
+    if not GS.IsManager(src) then
+        Bridge.Notify(src, "No tienes permisos de gestión.", "error")
         return
     end
-    
-    -- Very basic promote logic (you can expand this to read max grades from jobs.lua or open a sub-UI)
-    TriggerClientEvent('QBCore:Notify', src, "Funcionalidad de promoción en desarrollo.", "primary")
+    -- Pendiente: leer los grados del trabajo del framework y abrir un submenú.
+    Bridge.Notify(src, "Funcionalidad de promoción en desarrollo.", "primary")
 end)
 
 RegisterNetEvent('JGR_IlegalSystem:Server:HireEmployee', function(targetServerId)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-    if not IsGrowshopManager(Player) then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes permisos de gestión.", "error")
+    if not GS.IsManager(src) then
+        Bridge.Notify(src, "No tienes permisos de gestión.", "error")
         return
     end
-    local Target = QBCore.Functions.GetPlayer(targetServerId)
-    if not Target then 
-        TriggerClientEvent('QBCore:Notify', src, "Jugador no encontrado.", "error")
-        return 
+    targetServerId = tonumber(targetServerId)
+    if not targetServerId or targetServerId == src or not Bridge.IsOnline(targetServerId) then
+        Bridge.Notify(src, "Jugador no encontrado.", "error")
+        return
     end
 
-    Target.Functions.SetJob(Config.GrowShop.JobName, 0)
-    TriggerClientEvent('QBCore:Notify', src, "Has contratado a " .. Target.PlayerData.name, "success")
-    TriggerClientEvent('QBCore:Notify', Target.PlayerData.source, "Has sido contratado en el Grow Shop.", "success")
+    -- Hay que tener al candidato delante.
+    local myPed, targetPed = GetPlayerPed(src), GetPlayerPed(targetServerId)
+    if #(GetEntityCoords(myPed) - GetEntityCoords(targetPed)) > 5.0 then
+        Bridge.Notify(src, "No hay nadie cerca.", "error")
+        return
+    end
 
-    TriggerEvent('JGR_IlegalSystem:Server:GetEmployees', src)
+    if Bridge.Framework == 'standalone' then
+        Bridge.Notify(src, "En modo standalone los empleados se gestionan con permisos ACE (ver README).", "error")
+        return
+    end
+
+    local job = Bridge.GetJob(targetServerId)
+    if job and job.name == Config.GrowShop.JobName then
+        Bridge.Notify(src, "Esa persona ya trabaja aquí.", "error")
+        return
+    end
+
+    if not Bridge.SetJob(targetServerId, Config.GrowShop.JobName, 0) then
+        Bridge.Notify(src, "No se pudo contratar a esa persona.", "error")
+        return
+    end
+    Bridge.Notify(src, "Has contratado a " .. Bridge.GetCharName(targetServerId), "success")
+    Bridge.Notify(targetServerId, "Has sido contratado en el Grow Shop.", "success")
+
+    SendEmployees(src)
 end)

@@ -1,6 +1,9 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Cliente: efectos de consumibles y menú de liado del Grow Shop
+
+local RollJointGrowShop
 
 RegisterNetEvent("JGR_IlegalSystem:Client:UseConsumable", function(itemName, data)
+    if type(itemName) ~= "string" or type(data) ~= "table" then return end
     local playerPed = PlayerPedId()
 
     -- Decide the animation based on item type
@@ -23,11 +26,11 @@ RegisterNetEvent("JGR_IlegalSystem:Client:UseConsumable", function(itemName, dat
         propPlacement = {0.12, 0.028, 0.001, 10.0, 175.0, 0.0}
     end
 
-    -- Play animation using ox_lib progress bar if available, or just standard playAnim
-    if lib then
+    -- Animación con la barra de progreso de ox_lib
+    if lib and animDict then
         lib.progressBar({
             duration = 5000,
-            label = ("Consumiendo %s"):format(itemName),
+            label = ("Consumiendo %s"):format(Bridge.GetItemLabel(itemName, itemName)),
             useWhileDead = false,
             canCancel = true,
             disable = {
@@ -48,25 +51,20 @@ RegisterNetEvent("JGR_IlegalSystem:Client:UseConsumable", function(itemName, dat
             }
         })
     else
-        -- Fallback if ox_lib not present
-        RequestAnimDict(animDict)
-        while not HasAnimDictLoaded(animDict) do Wait(10) end
-        TaskPlayAnim(playerPed, animDict, animName, 8.0, 8.0, -1, 49, 0, false, false, false)
         Wait(5000)
-        ClearPedTasks(playerPed)
     end
 
     -- Apply Effects
-    -- Health
-    if data.health > 0 then
+    -- Vida
+    if (tonumber(data.health) or 0) > 0 then
         local maxHealth = GetEntityMaxHealth(playerPed)
         local newHealth = GetEntityHealth(playerPed) + data.health
         if newHealth > maxHealth then newHealth = maxHealth end
         SetEntityHealth(playerPed, newHealth)
     end
 
-    -- Armor
-    if data.armor > 0 then
+    -- Chaleco
+    if (tonumber(data.armor) or 0) > 0 then
         local maxArmor = 100
         local newArmor = GetPedArmor(playerPed) + data.armor
         if newArmor > maxArmor then newArmor = maxArmor end
@@ -111,23 +109,13 @@ end)
 -- Rolling Custom Joints (Phase 3.5)
 RegisterNetEvent("JGR_IlegalSystem:Client:OpenRollingMenu", function()
     local options = {}
-    local pData = QBCore.Functions.GetPlayerData()
-    
-    local hasWeed = false
-    local hasCbd = false
-    local hasKush = false
-    local hasAmnesia = false
-    local paperCount = 0
-    
-    if pData.items then
-        for _, item in pairs(pData.items) do
-            if item.name == "bud_standard" and item.amount >= 1 then hasWeed = true end
-            if item.name == "bud_cbd" and item.amount >= 1 then hasCbd = true end
-            if item.name == "bud_kush" and item.amount >= 1 then hasKush = true end
-            if item.name == "bud_amnesia" and item.amount >= 1 then hasAmnesia = true end
-            if item.name == "rolling_paper" then paperCount = item.amount end
-        end
-    end
+    local counts = Bridge.GetItemCounts({ "bud_standard", "bud_cbd", "bud_kush", "bud_amnesia", "rolling_paper" })
+
+    local hasWeed = (counts.bud_standard or 0) >= 1
+    local hasCbd = (counts.bud_cbd or 0) >= 1
+    local hasKush = (counts.bud_kush or 0) >= 1
+    local hasAmnesia = (counts.bud_amnesia or 0) >= 1
+    local paperCount = counts.rolling_paper or 0
 
     if hasWeed then
         table.insert(options, {
@@ -135,7 +123,7 @@ RegisterNetEvent("JGR_IlegalSystem:Client:OpenRollingMenu", function()
             description = 'Requiere: 1x Cogollo Standard, 1x Papel',
             icon = 'cannabis',
             onSelect = function()
-                RollJoint('bud_standard', 'joint_weed', 1)
+                RollJointGrowShop('bud_standard', 'joint_weed', 1)
             end
         })
     end
@@ -146,7 +134,7 @@ RegisterNetEvent("JGR_IlegalSystem:Client:OpenRollingMenu", function()
             description = 'Requiere: 1x Cogollo CBD, 1x Papel',
             icon = 'leaf',
             onSelect = function()
-                RollJoint('bud_cbd', 'joint_cbd', 1)
+                RollJointGrowShop('bud_cbd', 'joint_cbd', 1)
             end
         })
     end
@@ -157,7 +145,7 @@ RegisterNetEvent("JGR_IlegalSystem:Client:OpenRollingMenu", function()
             description = 'Requiere: 1x Cogollo Kush, 1x Papel',
             icon = 'star',
             onSelect = function()
-                RollJoint('bud_kush', 'joint_kush', 1)
+                RollJointGrowShop('bud_kush', 'joint_kush', 1)
             end
         })
     end
@@ -168,7 +156,7 @@ RegisterNetEvent("JGR_IlegalSystem:Client:OpenRollingMenu", function()
             description = 'Requiere: 1x Cogollo Amnesia, 2x Papel',
             icon = 'fire',
             onSelect = function()
-                RollJoint('bud_amnesia', 'blunt_amnesia', 2)
+                RollJointGrowShop('bud_amnesia', 'blunt_amnesia', 2)
             end
         })
     elseif hasAmnesia and paperCount < 2 then
@@ -181,7 +169,7 @@ RegisterNetEvent("JGR_IlegalSystem:Client:OpenRollingMenu", function()
     end
 
     if #options == 0 then
-        QBCore.Functions.Notify("No tienes cogollos para liar.", "error")
+        Bridge.Notify(PlayerId(), "No tienes cogollos para liar.", "error")
         return
     end
 
@@ -189,7 +177,8 @@ RegisterNetEvent("JGR_IlegalSystem:Client:OpenRollingMenu", function()
     lib.showContext('rolling_menu')
 end)
 
-function RollJoint(reqItem, rewardItem, paperReq)
+-- Antes se llamaba RollJoint (global) y chocaba con la función del mismo nombre de modules/drugs/client/processing.lua.
+function RollJointGrowShop(reqItem, rewardItem, paperReq)
     if lib.progressBar({
         duration = 6000,
         label = 'Liando artesanalmente...',
@@ -200,6 +189,6 @@ function RollJoint(reqItem, rewardItem, paperReq)
     }) then
         TriggerServerEvent('JGR_IlegalSystem:Server:FinishRolling', reqItem, rewardItem, paperReq)
     else
-        QBCore.Functions.Notify("Has parado de liar.", "error")
+        Bridge.Notify(PlayerId(), "Has parado de liar.", "error")
     end
 end

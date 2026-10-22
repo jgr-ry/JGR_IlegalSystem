@@ -1,20 +1,53 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Cliente: Grow Shop (blip, zonas de interacción, panel de gestión)
 
-RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
-    InitGrowShop()
-end)
+JGR.GrowShop = JGR.GrowShop or {}
+local GS = JGR.GrowShop
+GS.Role = nil -- 'manager' | 'employee' | nil (lo decide el servidor)
 
-AddEventHandler("onResourceStart", function(resourceName)
-    if GetCurrentResourceName() == resourceName then
-        InitGrowShop()
+local initialized = false
+local blip = nil
+
+--- Pregunta al servidor el rol del jugador en el Grow Shop (funciona en todos los frameworks).
+function GS.RefreshRole()
+    local ok, role = pcall(lib.callback.await, 'JGR_IlegalSystem:Server:GetGrowShopRole', false)
+    GS.Role = ok and role or nil
+    return GS.Role
+end
+
+local function OpenGrowShopMenu()
+    local role = GS.RefreshRole()
+    if not role then
+        Bridge.Notify(PlayerId(), "No trabajas aquí.", "error")
+        return
     end
-end)
+    if role ~= 'manager' then
+        Bridge.Notify(PlayerId(), "No tienes permisos suficientes (Solo Jefes/Encargados).", "error")
+        return
+    end
 
-function InitGrowShop()
-    if not Config.GrowShop.Enabled then return end
+    lib.callback('JGR_IlegalSystem:Server:GetSocietyFunds', false, function(funds)
+        if funds == nil then
+            Bridge.Notify(PlayerId(), "No tienes permisos de gestión.", "error")
+            return
+        end
+        SetNuiFocus(true, true)
+        SendNUIMessage({
+            action = "open_grow_shop",
+            market = Config.GrowShop.Wholesale,
+            recipes = Config.GrowShop.Crafting,
+            societyFunds = funds
+        })
+    end)
+end
+
+local function InitGrowShop()
+    if not Config.GrowShop.Enabled or initialized then return end
+    initialized = true
+
+    GS.RefreshRole()
 
     if Config.GrowShop.Blip and Config.GrowShop.Blip.Enabled then
-        local blip = AddBlipForCoord(Config.GrowShop.Location.x, Config.GrowShop.Location.y, Config.GrowShop.Location.z)
+        blip = AddBlipForCoord(Config.GrowShop.Location.x, Config.GrowShop.Location.y, Config.GrowShop.Location.z)
         SetBlipSprite(blip, Config.GrowShop.Blip.Sprite)
         SetBlipDisplay(blip, 4)
         SetBlipScale(blip, Config.GrowShop.Blip.Scale)
@@ -25,91 +58,51 @@ function InitGrowShop()
         EndTextCommandSetBlipName(blip)
     end
 
-    -- Target for the Grow Shop Boss Menu
-    exports['qb-target']:AddBoxZone("GrowShopBoss", Config.GrowShop.Location, 1.5, 1.5, {
-        name = "GrowShopBoss",
-        heading = 0,
-        debugPoly = false,
-        minZ = Config.GrowShop.Location.z - 1.0,
-        maxZ = Config.GrowShop.Location.z + 1.0,
-    }, {
-        options = {
-            {
-                type = "client",
-                action = function()
-                    OpenGrowShopMenu()
-                end,
-                icon = "fas fa-cannabis",
-                label = "Abrir Administración Grow Shop",
-                job = Config.GrowShop.JobName,
-            },
+    -- Panel de administración del Grow Shop
+    Bridge.AddBoxZone("GrowShopBoss", Config.GrowShop.Location, 1.5, 0.0, {
+        {
+            label = "Abrir Administración Grow Shop",
+            icon = "fas fa-cannabis",
+            canInteract = function() return GS.Role ~= nil end,
+            onSelect = OpenGrowShopMenu,
         },
-        distance = 2.0
-    })
+    }, 2.0)
 
-    -- Target for the Grow Shop Stash
+    -- Almacén del negocio
     if Config.GrowShop.Stash and Config.GrowShop.Stash.Enabled then
-        exports['qb-target']:AddBoxZone("GrowShopStash", Config.GrowShop.Stash.Location, 1.5, 1.5, {
-            name = "GrowShopStash",
-            heading = 0,
-            debugPoly = false,
-            minZ = Config.GrowShop.Stash.Location.z - 1.0,
-            maxZ = Config.GrowShop.Stash.Location.z + 1.0,
-        }, {
-            options = {
-                {
-                    type = "client",
-                    action = function()
-                        TriggerServerEvent("inventory:server:OpenInventory", "stash", Config.GrowShop.Stash.Name, {
-                            maxweight = Config.GrowShop.Stash.Weight,
-                            slots = Config.GrowShop.Stash.Slots,
-                        })
-                        TriggerEvent("inventory:client:SetCurrentStash", Config.GrowShop.Stash.Name)
-                    end,
-                    icon = "fas fa-box-open",
-                    label = Config.GrowShop.Stash.Label,
-                    job = Config.GrowShop.JobName,
-                },
+        Bridge.AddBoxZone("GrowShopStash", Config.GrowShop.Stash.Location, 1.5, 0.0, {
+            {
+                label = Config.GrowShop.Stash.Label,
+                icon = "fas fa-box-open",
+                canInteract = function() return GS.Role ~= nil end,
+                onSelect = function()
+                    TriggerServerEvent('JGR_IlegalSystem:Server:OpenGrowShopStash')
+                end,
             },
-            distance = 2.0
-        })
+        }, 2.0)
     end
 end
 
-function OpenGrowShopMenu()
-    local PlayerData = QBCore.Functions.GetPlayerData()
-    local playerJob = PlayerData.job
-    
-    if playerJob.name ~= Config.GrowShop.JobName then
-        QBCore.Functions.Notify("No trabajas aquí.", "error")
-        return
-    end
+Bridge.OnPlayerLoaded(function()
+    SetTimeout(1000, function()
+        InitGrowShop()
+        GS.RefreshRole()
+    end)
+end)
 
-    local isManager = false
-    for _, rank in pairs(Config.GrowShop.ManagementRanks) do
-        -- Check grade level name or number based on how QBCore assigns it, typically grade.name or grade.level
-        if string.lower(playerJob.grade.name) == string.lower(rank) or tostring(playerJob.grade.level) == rank then
-            isManager = true
-            break
-        end
-    end
+Bridge.OnJobUpdate(function()
+    SetTimeout(500, GS.RefreshRole)
+end)
 
-    if not isManager then
-        QBCore.Functions.Notify("No tienes permisos suficientes (Solo Jefes/Encargados).", "error")
-        return
-    end
+CreateThread(function()
+    Wait(1500)
+    InitGrowShop()
+end)
 
-    -- Fetch society money from server via callback before opening
-    QBCore.Functions.TriggerCallback('JGR_IlegalSystem:Server:GetSocietyFunds', function(funds)
-        SetNuiFocus(true, true)
-        SendNUIMessage({
-            action = "open_grow_shop",
-            market = Config.GrowShop.Wholesale,
-            recipes = Config.GrowShop.Crafting,
-            societyFunds = funds
-        })
-    end, Config.GrowShop.JobName)
-end
+AddEventHandler('onResourceStop', function(res)
+    if res ~= GetCurrentResourceName() then return end
+    if blip and DoesBlipExist(blip) then RemoveBlip(blip) end
+end)
 
 -- NUI Callbacks
 RegisterNUICallback('closeGrowShop', function(data, cb)
@@ -118,61 +111,63 @@ RegisterNUICallback('closeGrowShop', function(data, cb)
 end)
 
 RegisterNUICallback('checkoutGrowShopCart', function(data, cb)
-    TriggerServerEvent('JGR_IlegalSystem:Server:CheckoutCart', data.cart)
     cb('ok')
+    if type(data) == "table" then
+        TriggerServerEvent('JGR_IlegalSystem:Server:CheckoutCart', data.cart)
+    end
 end)
 
 RegisterNUICallback('craftGrowItem', function(data, cb)
-    TriggerServerEvent('JGR_IlegalSystem:Server:CraftGrowItem', data.recipeId, data.batches)
     cb('ok')
+    if type(data) == "table" then
+        TriggerServerEvent('JGR_IlegalSystem:Server:CraftGrowItem', data.recipeId, data.batches)
+    end
 end)
 
 RegisterNUICallback('manageGrowShopFunds', function(data, cb)
-    TriggerServerEvent('JGR_IlegalSystem:Server:ManageFunds', data.action, data.amount)
     cb('ok')
+    if type(data) == "table" then
+        TriggerServerEvent('JGR_IlegalSystem:Server:ManageFunds', data.action, data.amount)
+    end
 end)
 
 RegisterNUICallback('getGrowShopEmployees', function(data, cb)
-    TriggerServerEvent('JGR_IlegalSystem:Server:GetEmployees')
     cb('ok')
+    TriggerServerEvent('JGR_IlegalSystem:Server:GetEmployees')
 end)
 
 RegisterNUICallback('hireGrowShopEmployee', function(data, cb)
-    -- Get closest player
-    local target, distance = QBCore.Functions.GetClosestPlayer()
-    if target ~= -1 and distance < 3.0 then
-        local targetServerId = GetPlayerServerId(target)
+    cb('ok')
+    local targetServerId = Bridge.GetClosestPlayer(3.0)
+    if targetServerId then
         TriggerServerEvent('JGR_IlegalSystem:Server:HireEmployee', targetServerId)
     else
-        QBCore.Functions.Notify('No hay nadie cerca.', 'error')
+        Bridge.Notify(PlayerId(), 'No hay nadie cerca.', 'error')
     end
-    cb('ok')
 end)
 
 RegisterNUICallback('fireGrowShopEmployee', function(data, cb)
-    if data.citizenid then
+    cb('ok')
+    if type(data) == "table" and data.citizenid then
         TriggerServerEvent('JGR_IlegalSystem:Server:FireEmployee', data.citizenid)
     end
-    cb('ok')
 end)
 
 RegisterNUICallback('promoteGrowShopEmployee', function(data, cb)
-    if data.citizenid then
+    cb('ok')
+    if type(data) == "table" and data.citizenid then
         TriggerServerEvent('JGR_IlegalSystem:Server:PromoteEmployee', data.citizenid)
     end
-    cb('ok')
 end)
 
-RegisterNetEvent('JGR_IlegalSystem:Client:UpdateEmployeesList')
-AddEventHandler('JGR_IlegalSystem:Client:UpdateEmployeesList', function(employees)
+RegisterNetEvent('JGR_IlegalSystem:Client:UpdateEmployeesList', function(employees)
     SendNUIMessage({
         action = "update_grow_employees",
         employees = employees
     })
 end)
 
-RegisterNetEvent('JGR_IlegalSystem:Client:UpdateGrowShopMoney')
-AddEventHandler('JGR_IlegalSystem:Client:UpdateGrowShopMoney', function(newFunds)
+RegisterNetEvent('JGR_IlegalSystem:Client:UpdateGrowShopMoney', function(newFunds)
     SendNUIMessage({
         action = "update_grow_money",
         societyFunds = newFunds

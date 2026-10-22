@@ -1,98 +1,80 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Servidor: liar porros (papel de liar) y empaquetar cogollos en bolsitas
 
 -- ============================================================
--- ROLLING JOINTS SYSTEM (Papel de liar)
+-- LIAR PORROS (Papel de liar)
 -- ============================================================
-
--- Register usable item
 CreateThread(function()
-    if Config.Framework ~= "qbcore" then return end
-
-    QBCore.Functions.CreateUseableItem("rolling_paper", function(source, item)
-        TriggerClientEvent('JGR_Drugs:Client:RollJointMenu', source)
+    Bridge.RegisterUsableItem("rolling_paper", function(src)
+        TriggerClientEvent('JGR_Drugs:Client:RollJointMenu', src)
     end)
 end)
 
+--- Quita los ingredientes y entrega el resultado; si algo falla, devuelve lo quitado.
+local function craft(src, inputs, result, resultAmount)
+    for _, input in ipairs(inputs) do
+        if Bridge.GetItemCount(src, input.item) < input.amount then return false, 'missing' end
+    end
+    if not Bridge.CanCarryItem(src, result, resultAmount) then return false, 'full' end
+
+    local removed = {}
+    for _, input in ipairs(inputs) do
+        if not Bridge.RemoveItem(src, input.item, input.amount) then
+            for _, r in ipairs(removed) do Bridge.AddItem(src, r.item, r.amount) end
+            return false, 'missing'
+        end
+        removed[#removed + 1] = input
+    end
+    Bridge.AddItem(src, result, resultAmount)
+    return true
+end
+
 RegisterNetEvent('JGR_Drugs:Server:RollJoint', function(index)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-
-    local cfg = Config.Processing.Joints[index]
+    index = Bridge.Util.ToInt(index, 1)
+    local cfg = index and Config.Processing.Joints[index]
     if not cfg then return end
 
-    -- Verify items on server
-    local hasBud = Player.Functions.GetItemByName(cfg.bud)
-    local hasPaper = Player.Functions.GetItemByName(cfg.paper)
+    local ok, reason = craft(src, {
+        { item = cfg.bud, amount = 1 },
+        { item = cfg.paper, amount = tonumber(cfg.paper_amt) or 1 },
+    }, cfg.result, 1)
 
-    if not hasBud or hasBud.amount < 1 then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes suficientes cogollos.", "error")
-        return
+    if ok then
+        Bridge.Notify(src, "Has liado un " .. cfg.label, "success")
+    elseif reason == 'full' then
+        Bridge.Notify(src, "No tienes espacio en el inventario.", "error")
+    else
+        Bridge.Notify(src, "No tienes suficientes cogollos o papel de liar.", "error")
     end
-
-    if not hasPaper or hasPaper.amount < cfg.paper_amt then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes suficiente papel de liar.", "error")
-        return
-    end
-
-    -- Remove items and add result
-    Player.Functions.RemoveItem(cfg.bud, 1)
-    TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[cfg.bud], "remove")
-    
-    Player.Functions.RemoveItem(cfg.paper, cfg.paper_amt)
-    TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[cfg.paper], "remove")
-
-    Player.Functions.AddItem(cfg.result, 1)
-    TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[cfg.result], "add")
-
-    TriggerClientEvent('QBCore:Notify', src, "Has liado un " .. cfg.label, "success")
 end)
 
 -- ============================================================
--- DRUG BAGGING SYSTEM (Mesa de procesado)
+-- EMPAQUETAR COGOLLOS (Mesa de procesado)
 -- ============================================================
-
 RegisterNetEvent('JGR_Drugs:Server:ProcessBaggie', function(index)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-
-    local cfg = Config.Processing.Baggies[index]
+    index = Bridge.Util.ToInt(index, 1)
+    local cfg = index and Config.Processing.Baggies[index]
     if not cfg then return end
 
     local ped = GetPlayerPed(src)
-    local coords = GetEntityCoords(ped)
-    local targetCoords = Config.Processing.BaggieLocation.xyz
-    local dist = #(coords - targetCoords)
-
+    if not ped or ped == 0 then return end
+    local dist = #(GetEntityCoords(ped) - Config.Processing.BaggieLocation.xyz)
     if dist > (Config.Processing.BaggieTargetDistance + 2.0) then
-        -- Anti-cheat flag, too far
+        -- Demasiado lejos de la mesa: petición ignorada
         return
     end
 
-    -- Verify items on server
-    local hasBud = Player.Functions.GetItemByName(cfg.bud)
-    local hasBag = Player.Functions.GetItemByName(cfg.baggie)
+    local ok, reason = craft(src, {
+        { item = cfg.bud, amount = tonumber(cfg.bud_amt) or 1 },
+        { item = cfg.baggie, amount = 1 },
+    }, cfg.result, 1)
 
-    if not hasBud or hasBud.amount < cfg.bud_amt then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes suficientes cogollos.", "error")
-        return
+    if ok then
+        Bridge.Notify(src, "Has procesado 1x " .. cfg.label, "success")
+    elseif reason == 'full' then
+        Bridge.Notify(src, "No tienes espacio en el inventario.", "error")
+    else
+        Bridge.Notify(src, "No tienes suficientes cogollos o bolsitas vacías.", "error")
     end
-
-    if not hasBag or hasBag.amount < 1 then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes bolsitas vacías.", "error")
-        return
-    end
-
-    -- Remove items and add result
-    Player.Functions.RemoveItem(cfg.bud, cfg.bud_amt)
-    TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[cfg.bud], "remove")
-    
-    Player.Functions.RemoveItem(cfg.baggie, 1)
-    TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[cfg.baggie], "remove")
-
-    Player.Functions.AddItem(cfg.result, 1)
-    TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[cfg.result], "add")
-
-    TriggerClientEvent('QBCore:Notify', src, "Has procesado 1x " .. cfg.label, "success")
 end)

@@ -1,4 +1,4 @@
-local QBCore = exports['qb-core']:GetCoreObject()
+-- Cliente: cultivo de plantas (props, plantar, regar, cosechar y HUD)
 
 -- ============================================================
 -- LOCAL PLANT CACHE (synced from server)
@@ -22,9 +22,10 @@ local function SpawnPlantProp(plant)
     if not propName then return end
 
     local hash = GetHashKey(propName)
+    if not IsModelInCdimage(hash) then return end
     RequestModel(hash)
     local timeout = 0
-    while not HasModelLoaded(hash) and timeout < 50 do Wait(10); timeout = timeout + 1 end
+    while not HasModelLoaded(hash) and timeout < 200 do Wait(10); timeout = timeout + 1 end
 
     if HasModelLoaded(hash) then
         local obj = CreateObject(hash, plant.coords.x, plant.coords.y, plant.coords.z - 0.3, false, false, false)
@@ -61,6 +62,7 @@ end
 -- SYNC FROM SERVER
 -- ============================================================
 RegisterNetEvent('JGR_Drugs:Client:SyncPlants', function(plants)
+    if type(plants) ~= "table" then return end
     for _, p in pairs(LocalPlants) do
         DeletePlantProp(p)
     end
@@ -109,10 +111,14 @@ RegisterNetEvent('JGR_Drugs:Client:RemovePlant', function(plantId)
     end
 end)
 
--- Request plants when player loads
+-- Pedir las plantas al entrar (y al reiniciar el recurso)
 CreateThread(function()
     Wait(5000)
     TriggerServerEvent('JGR_Drugs:Server:RequestPlants')
+end)
+
+Bridge.OnPlayerLoaded(function()
+    SetTimeout(3000, function() TriggerServerEvent('JGR_Drugs:Server:RequestPlants') end)
 end)
 
 -- ============================================================
@@ -171,7 +177,7 @@ RegisterNetEvent('JGR_Drugs:Client:StartPlanting', function(seedType)
             if Config.Debug then
                 print(('[JGR_Drugs] REJECTED material: 0x%08X'):format((materialHash or 0) & 0xFFFFFFFF))
             end
-            QBCore.Functions.Notify("No puedes plantar aquí, necesitas tierra fértil.", "error", 5000)
+            Bridge.Notify(PlayerId(), "No puedes plantar aquí, necesitas tierra fértil.", "error", 5000)
             return
         end
     end
@@ -199,7 +205,7 @@ RegisterNetEvent('JGR_Drugs:Client:StartPlanting', function(seedType)
     if animComplete then
         TriggerServerEvent('JGR_Drugs:Server:PlantSeed', seedType, groundCoords or coords)
     else
-        QBCore.Functions.Notify("Has cancelado la plantación.", "error")
+        Bridge.Notify(PlayerId(), "Has cancelado la plantación.", "error")
     end
 end)
 
@@ -224,13 +230,13 @@ RegisterNetEvent('JGR_Drugs:Client:UseWatercan', function()
     end
 
     if not closestId then
-        QBCore.Functions.Notify("No hay ninguna planta cerca para regar.", "error", 3000)
+        Bridge.Notify(PlayerId(), "No hay ninguna planta cerca para regar.", "error", 3000)
         return
     end
 
     local plant = LocalPlants[closestId]
     if plant.water >= 100 then
-        QBCore.Functions.Notify("Esta planta ya tiene suficiente agua.", "info", 3000)
+        Bridge.Notify(PlayerId(), "Esta planta ya tiene suficiente agua.", "info", 3000)
         return
     end
 
@@ -262,6 +268,7 @@ end)
 -- ============================================================
 -- NUI HUD + E-KEY INTERACTION LOOP
 -- ============================================================
+local nextHudUpdate = 0
 CreateThread(function()
     while true do
         local sleep = 1000
@@ -281,7 +288,10 @@ CreateThread(function()
             end
         end
 
-        -- Show NUI HUD when near a plant (< 5m)
+        -- Si no hay plantas cerca, se comprueba con menos frecuencia
+        if closestDist > 50.0 then sleep = 2500 elseif closestDist > 10.0 then sleep = 1000 else sleep = 250 end
+
+        -- HUD cuando estás junto a una planta (< 2.5 m)
         if closestId and closestDist < 2.5 then
             sleep = 0
             local plant = LocalPlants[closestId]
@@ -299,7 +309,8 @@ CreateThread(function()
                         elapsed = plant.elapsed or 0,
                         stageTime = plant.stageTime or 1
                     })
-                else
+                elseif GetGameTimer() >= nextHudUpdate then
+                    nextHudUpdate = GetGameTimer() + 500 -- no hace falta reenviar el HUD cada frame
                     SendNUIMessage({
                         action = "update_plant_hud",
                         stage = plant.stage,
@@ -313,9 +324,9 @@ CreateThread(function()
                 if closestDist < 2.0 then
                     if IsControlJustReleased(0, 38) then -- E key
                         -- Check for scissors FIRST before animation
-                        local hasScissors = QBCore.Functions.HasItem("trimming_scissors")
+                        local hasScissors = Bridge.HasItem("trimming_scissors")
                         if not hasScissors then
-                            QBCore.Functions.Notify("Necesitas tijeras de podar para recoger.", "error", 3000)
+                            Bridge.Notify(PlayerId(), "Necesitas tijeras de podar para recoger.", "error", 3000)
                         else
                             local harvested = false
                             if lib then

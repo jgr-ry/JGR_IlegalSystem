@@ -1,10 +1,17 @@
-local QBCore = exports['qb-core']:GetCoreObject()
-
 -- ============================================================
 -- IN-MEMORY PLANT CACHE (synced from DB)
 -- ============================================================
 local Plants = {} -- { [id] = { id, owner, seed_type, coords={x,y,z}, stage, water, _elapsed } }
-local ScissorUses = {} -- { [citizenid] = usageCount } — resets every 2 harvests
+local ScissorUses = {} -- { [identificador] = usos } — se gastan unas tijeras cada 2 cosechas
+
+local PLANT_INTERACT_DISTANCE = 3.5 -- distancia máxima (servidor) para regar / cosechar
+local PLANT_PLACE_DISTANCE = 5.0    -- distancia máxima entre el jugador y el punto donde planta
+
+local function isPlayerNear(src, coords, maxDist)
+    local ped = GetPlayerPed(src)
+    if not ped or ped == 0 or type(coords) ~= 'table' then return false end
+    return #(GetEntityCoords(ped) - vector3(coords.x + 0.0, coords.y + 0.0, coords.z + 0.0)) <= maxDist
+end
 
 -- ============================================================
 -- LOAD ALL PLANTS FROM DB ON START
@@ -45,7 +52,8 @@ AddEventHandler('onResourceStart', function(resName)
     MySQL.query('SELECT * FROM jgr_plants', {}, function(results)
         if not results then return end
         for _, row in ipairs(results) do
-            local c = json.decode(row.coords)
+            local c = Bridge.Util.SafeDecode(row.coords, nil)
+            if c and c.x and c.y and c.z then
             Plants[row.id] = {
                 id = row.id,
                 owner = row.owner,
@@ -55,6 +63,7 @@ AddEventHandler('onResourceStart', function(resName)
                 water = row.water,
                 _elapsed = 0
             }
+            end
         end
         if Config.Debug then
             print(("[JGR_Drugs] Loaded %d plants from database."):format(#results))
@@ -113,11 +122,13 @@ end)
 -- ============================================================
 RegisterNetEvent('JGR_Drugs:Server:PlantSeed', function(seedType, coords)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
+    local citizenid = Bridge.GetIdentifier(src)
+    if not citizenid then return end
 
     if type(seedType) ~= "string" then return end
-    if type(coords) ~= "table" then return end
+    -- Los vectores llegan por red como "vector3", no como "table"
+    local ct = type(coords)
+    if ct ~= "table" and ct ~= "vector3" and ct ~= "vector4" then return end
     local x = tonumber(coords.x)
     local y = tonumber(coords.y)
     local z = tonumber(coords.z)
@@ -126,24 +137,25 @@ RegisterNetEvent('JGR_Drugs:Server:PlantSeed', function(seedType, coords)
     local seedCfg = Config.Growing.Seeds[seedType]
     if not seedCfg then return end
 
-    local hasSeed = Player.Functions.GetItemByName(seedType)
-    if not hasSeed or hasSeed.amount < 1 then
-        TriggerClientEvent('QBCore:Notify', src, "No tienes esa semilla.", "error")
+    -- No se puede plantar a distancia (antes se aceptaban coordenadas arbitrarias del cliente).
+    if not isPlayerNear(src, { x = x, y = y, z = z }, PLANT_PLACE_DISTANCE) then return end
+
+    if Bridge.GetItemCount(src, seedType) < 1 then
+        Bridge.Notify(src, "No tienes esa semilla.", "error")
         return
     end
 
-    if seedCfg.requiresPot then
-        local hasPot = Player.Functions.GetItemByName("grow_pot")
-        if not hasPot or hasPot.amount < 1 then
-            TriggerClientEvent('QBCore:Notify', src, "Necesitas una maceta para esta semilla.", "error")
-            return
-        end
-        Player.Functions.RemoveItem("grow_pot", 1)
+    if seedCfg.requiresPot and Bridge.GetItemCount(src, "grow_pot") < 1 then
+        Bridge.Notify(src, "Necesitas una maceta para esta semilla.", "error")
+        return
     end
 
-    Player.Functions.RemoveItem(seedType, 1)
+    if not Bridge.RemoveItem(src, seedType, 1) then return end
+    if seedCfg.requiresPot and not Bridge.RemoveItem(src, "grow_pot", 1) then
+        Bridge.AddItem(src, seedType, 1)
+        return
+    end
 
-    local citizenid = Player.PlayerData.citizenid
     local coordsJson = json.encode({ x = x, y = y, z = z })
 
     -- Water starts at 0 — player needs to water the plant!
@@ -167,7 +179,7 @@ RegisterNetEvent('JGR_Drugs:Server:PlantSeed', function(seedType, coords)
                 }
                 Plants[id] = plantData
                 SyncSinglePlant(plantData)
-                TriggerClientEvent('QBCore:Notify', src, "Has plantado " .. seedCfg.label .. ". ¡Riégala!", "success")
+                Bridge.Notify(src, "Has plantado " .. seedCfg.label .. ". ¡Riégala!", "success")
             end
         end)
 end)
@@ -177,17 +189,14 @@ end)
 -- ============================================================
 RegisterNetEvent('JGR_Drugs:Server:WaterPlant', function(plantId)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-
     plantId = tonumber(plantId)
     if not plantId then return end
     local plant = Plants[plantId]
     if not plant then return end
+    if not isPlayerNear(src, plant.coords, PLANT_INTERACT_DISTANCE) then return end
 
-    local hasWater = Player.Functions.GetItemByName("grow_watercan")
-    if not hasWater or hasWater.amount < 1 then
-        TriggerClientEvent('QBCore:Notify', src, "Necesitas una regadera.", "error")
+    if Bridge.GetItemCount(src, "grow_watercan") < 1 then
+        Bridge.Notify(src, "Necesitas una regadera.", "error")
         return
     end
 
@@ -195,7 +204,7 @@ RegisterNetEvent('JGR_Drugs:Server:WaterPlant', function(plantId)
     plant.water = 100
     MySQL.update('UPDATE jgr_plants SET water = 100 WHERE id = ?', { plantId })
     SyncSinglePlant(plant)
-    TriggerClientEvent('QBCore:Notify', src, "Planta regada al 100%. 💧", "success")
+    Bridge.Notify(src, "Planta regada al 100%. 💧", "success")
 end)
 
 -- ============================================================
@@ -203,21 +212,22 @@ end)
 -- ============================================================
 RegisterNetEvent('JGR_Drugs:Server:HarvestPlant', function(plantId)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
+    local cid = Bridge.GetIdentifier(src)
+    if not cid then return end
 
     plantId = tonumber(plantId)
     if not plantId then return end
     local plant = Plants[plantId]
     if not plant then return end
 
+    -- Hay que estar junto a la planta (antes se podía cosechar cualquier planta del mapa por su ID).
+    if not isPlayerNear(src, plant.coords, PLANT_INTERACT_DISTANCE) then return end
+
     local seedCfg = Config.Growing.Seeds[plant.seed_type]
     if not seedCfg then return end
 
-    -- Must have trimming scissors
-    local hasScissors = Player.Functions.GetItemByName("trimming_scissors")
-    if not hasScissors or hasScissors.amount < 1 then
-        TriggerClientEvent('QBCore:Notify', src, "Necesitas tijeras de podar.", "error")
+    if Bridge.GetItemCount(src, "trimming_scissors") < 1 then
+        Bridge.Notify(src, "Necesitas tijeras de podar.", "error")
         return
     end
 
@@ -227,24 +237,26 @@ RegisterNetEvent('JGR_Drugs:Server:HarvestPlant', function(plantId)
     local maxYield = math.max(1, math.floor(seedCfg.harvestMax * stagePct))
     local amount = math.random(minYield, maxYield)
 
-    Player.Functions.AddItem(seedCfg.bud, amount)
-    TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[seedCfg.bud], "add")
+    if not Bridge.CanCarryItem(src, seedCfg.bud, amount) then
+        Bridge.Notify(src, "No tienes espacio en el inventario.", "error")
+        return
+    end
 
-    -- Scissors durability: consume 1 every 2 harvests
-    local cid = Player.PlayerData.citizenid
+    -- Se quita la planta ANTES de dar los cogollos para que no se pueda cosechar dos veces.
+    Plants[plantId] = nil
+    MySQL.query('DELETE FROM jgr_plants WHERE id = ?', { plantId })
+    SyncRemovePlant(plantId)
+
+    Bridge.AddItem(src, seedCfg.bud, amount)
+
+    -- Durabilidad de las tijeras: se gasta 1 cada 2 cosechas
     ScissorUses[cid] = (ScissorUses[cid] or 0) + 1
     if ScissorUses[cid] >= 2 then
-        Player.Functions.RemoveItem("trimming_scissors", 1)
-        TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items["trimming_scissors"], "remove")
+        Bridge.RemoveItem(src, "trimming_scissors", 1)
         ScissorUses[cid] = 0
     end
 
-    -- Remove from DB and memory
-    MySQL.query('DELETE FROM jgr_plants WHERE id = ?', { plantId })
-    Plants[plantId] = nil
-    SyncRemovePlant(plantId)
-
-    TriggerClientEvent('QBCore:Notify', src, ("Has recogido %dx %s"):format(amount, seedCfg.label), "success")
+    Bridge.Notify(src, ("Has recogido %dx %s"):format(amount, seedCfg.label), "success")
 end)
 
 -- ============================================================
@@ -260,30 +272,29 @@ CreateThread(function()
                 -- Decay water
                 plant.water = math.max(0, plant.water - Config.Growing.WaterDecayPerMinute)
 
-                -- Check if plant should die
                 if plant.water <= 0 and Config.Growing.DeathAtZeroWater then
+                    -- La planta muere: se borra y NO se vuelve a sincronizar
+                    -- (antes se reenviaba a los clientes justo después de borrarla y reaparecía).
                     MySQL.query('DELETE FROM jgr_plants WHERE id = ?', { id })
                     Plants[id] = nil
                     SyncRemovePlant(id)
-                elseif plant.water > 0 and plant.stage < 5 then
-                    -- Try to advance stage
-                    local currentStageCfg = seedCfg.stages[plant.stage]
-                    if currentStageCfg then
-                        plant._elapsed = (plant._elapsed or 0) + 1
-                        if plant._elapsed >= currentStageCfg.time then
-                            plant.stage = plant.stage + 1
-                            plant._elapsed = 0
-                            SyncSinglePlant(plant)
+                else
+                    if plant.water > 0 and plant.stage < 5 then
+                        local currentStageCfg = seedCfg.stages[plant.stage]
+                        if currentStageCfg then
+                            plant._elapsed = (plant._elapsed or 0) + 1
+                            if plant._elapsed >= currentStageCfg.time then
+                                plant.stage = plant.stage + 1
+                                plant._elapsed = 0
+                            end
                         end
                     end
+
+                    -- Un único envío por planta y minuto (antes se enviaba dos veces al cambiar de fase)
+                    SyncSinglePlant(plant)
+                    MySQL.update('UPDATE jgr_plants SET stage = ?, water = ? WHERE id = ?',
+                        { plant.stage, plant.water, id })
                 end
-
-                -- Sync water updates to clients every tick
-                SyncSinglePlant(plant)
-
-                -- Update DB periodically
-                MySQL.update('UPDATE jgr_plants SET stage = ?, water = ? WHERE id = ?',
-                    { plant.stage, plant.water, id })
             end
         end
     end
@@ -293,18 +304,16 @@ end)
 -- REGISTER SEED ITEMS + WATERCAN AS USABLE
 -- ============================================================
 CreateThread(function()
-    if Config.Framework ~= "qbcore" then return end
-
-    -- Seeds
+    -- Semillas
     for seedName, _ in pairs(Config.Growing.Seeds) do
-        QBCore.Functions.CreateUseableItem(seedName, function(source, item)
-            TriggerClientEvent('JGR_Drugs:Client:StartPlanting', source, item.name)
+        Bridge.RegisterUsableItem(seedName, function(src)
+            TriggerClientEvent('JGR_Drugs:Client:StartPlanting', src, seedName)
         end)
     end
 
-    -- Watercan — use from inventory to water nearby plant
-    QBCore.Functions.CreateUseableItem("grow_watercan", function(source, item)
-        TriggerClientEvent('JGR_Drugs:Client:UseWatercan', source)
+    -- Regadera: se usa desde el inventario junto a una planta
+    Bridge.RegisterUsableItem("grow_watercan", function(src)
+        TriggerClientEvent('JGR_Drugs:Client:UseWatercan', src)
     end)
 
     if Config.Debug then

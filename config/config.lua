@@ -1,14 +1,20 @@
 Config = Config or {}
 
--- Framework Settings
-Config.Framework = "qbcore" -- "qbcore", "esx", or "standalone"
+-- Framework
+--   "auto"       → detección automática (qbx_core → qb-core → es_extended → ox_core → standalone)
+--   "qb"         → QBCore            (también vale el valor antiguo "qbcore")
+--   "qbx"        → Qbox
+--   "esx"        → ESX Legacy
+--   "standalone" → sin framework / ox_core (permisos por ACE, dinero e items con ox_inventory)
+Config.Framework = "auto"
 
--- General Settings
-Config.Locale = "es" -- Language
-Config.Debug = true  -- Enable debug commands (/testnpc, /tpnpc) and console prints
+-- Ajustes generales
+Config.Locale = "es" -- Idioma (config/locales/<idioma>.lua)
+Config.Debug = false -- true = mensajes en consola y comandos de prueba (/testnpc, /tpnpc)
 
---- Inventario de almacén de banda: "ox_inventory" (recomendado) o "qb-inventory"
-Config.GangInventory = "ox_inventory"
+--- Inventario del almacén de banda: "auto" (recomendado), "ox_inventory" o "qb-inventory".
+--- Si eliges ox_inventory pero no está iniciado, se usa automáticamente el inventario del framework.
+Config.GangInventory = "auto"
 --- Máximo de vehículos guardados por banda (garaje)
 Config.GangGarageMaxVehicles = 8
 --- Garaje en mundo: "ox_lib" = menú contextual (recomendado, evita NUI fantasma) | "nui" = panel HTML
